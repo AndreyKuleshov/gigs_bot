@@ -8,11 +8,10 @@ primary_region = "ams"  # Amsterdam — change to the region closest to you
 
 [env]
   API_HOST = "0.0.0.0"
-  API_PORT = "8080"
   DEBUG    = "false"
 
 [http_service]
-  internal_port       = 8080
+  internal_port       = 8000
   force_https         = true
   auto_stop_machines  = false   # keep alive — bot needs a persistent process
   auto_start_machines = true
