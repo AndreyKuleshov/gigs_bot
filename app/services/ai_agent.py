@@ -44,18 +44,35 @@ _TOOLS: list[dict] = [
         "function": {
             "name": "read_events",
             "description": (
-                "List upcoming calendar events. Call this first whenever you need an event_id."
+                "List calendar events. Call this first whenever you need an event_id. "
+                "Use time_min/time_max to target a specific date or range."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "max_results": {
                         "type": "integer",
-                        "description": "Maximum events to return (default 10).",
+                        "description": "Maximum events to return (default 25).",
                     },
                     "query": {
                         "type": "string",
                         "description": "Optional free-text search query.",
+                    },
+                    "time_min": {
+                        "type": "string",
+                        "description": (
+                            "Lower bound (inclusive) for event start time, ISO 8601. "
+                            "Use to look up events on or after a specific date, "
+                            "e.g. '2026-06-13T00:00:00+00:00'."
+                        ),
+                    },
+                    "time_max": {
+                        "type": "string",
+                        "description": (
+                            "Upper bound (exclusive) for event start time, ISO 8601. "
+                            "Use together with time_min to scope a single day, "
+                            "e.g. '2026-06-14T00:00:00+00:00'."
+                        ),
                     },
                 },
             },
@@ -155,10 +172,18 @@ class AIAgent:
 
         try:
             if name == "read_events":
+                time_min: datetime | None = None
+                time_max: datetime | None = None
+                if args.get("time_min"):
+                    time_min = datetime.fromisoformat(args["time_min"])
+                if args.get("time_max"):
+                    time_max = datetime.fromisoformat(args["time_max"])
                 events = await calendar_service.list_events(
                     credentials,
                     calendar_id=calendar_id,
-                    max_results=int(args.get("max_results", 10)),
+                    max_results=int(args.get("max_results", 25)),
+                    time_min=time_min,
+                    time_max=time_max,
                     query=args.get("query"),
                 )
                 if not events:
