@@ -8,11 +8,14 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Copy dependency files first for layer caching
 COPY pyproject.toml uv.lock ./
 
-# Install production deps only (no dev extras)
+# Install production deps into the venv
 RUN uv sync --frozen --no-dev
 
 # Copy application source
 COPY . .
 
-# Use uv's managed Python to run the app
-CMD ["uv", "run", "python", "main.py"]
+# Add the venv to PATH so `python` resolves to the venv's interpreter directly,
+# avoiding `uv run` which re-checks and recreates the venv on every container start.
+ENV PATH="/usr/src/app/.venv/bin:$PATH"
+
+CMD ["python", "main.py"]
