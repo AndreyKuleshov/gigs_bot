@@ -9,6 +9,7 @@ Flow:
 """
 
 import asyncio
+import json
 import logging
 import secrets
 
@@ -47,12 +48,6 @@ class AuthService:
     async def get_auth_url(self, telegram_user_id: int) -> str:
         """Store a random state in Redis and return the Google authorisation URL."""
         state = secrets.token_urlsafe(32)
-        redis = get_redis()
-        await redis.setex(
-            f"{_STATE_PREFIX}{state}",
-            _STATE_TTL_SECONDS,
-            str(telegram_user_id),
-        )
         flow = _build_flow()
         flow.redirect_uri = settings.google_redirect_uri
         auth_url, _ = flow.authorization_url(
@@ -61,6 +56,14 @@ class AuthService:
             include_granted_scopes="true",
             prompt="consent",
         )
+        # Persist both the user_id and the PKCE code_verifier that the Flow
+        # embedded in the auth URL as code_challenge. Without it the token
+        # exchange will fail with "Missing code verifier".
+        state_data = json.dumps(
+            {"user_id": telegram_user_id, "code_verifier": flow.code_verifier or ""}
+        )
+        redis = get_redis()
+        await redis.setex(f"{_STATE_PREFIX}{state}", _STATE_TTL_SECONDS, state_data)
         return auth_url
 
     async def handle_oauth_callback(self, code: str, state: str) -> int:
@@ -73,13 +76,16 @@ class AuthService:
         raw = await redis.get(f"{_STATE_PREFIX}{state}")
         if raw is None:
             raise ValueError("OAuth state is expired or invalid")
-        telegram_user_id = int(raw)
+        parsed = json.loads(raw)
+        telegram_user_id = int(parsed["user_id"])
+        code_verifier: str | None = parsed.get("code_verifier") or None
         await redis.delete(f"{_STATE_PREFIX}{state}")
 
         flow = _build_flow()
         flow.redirect_uri = settings.google_redirect_uri
-        # fetch_token is a synchronous HTTP call – offload to thread pool
-        await asyncio.to_thread(flow.fetch_token, code=code)
+        # fetch_token is a synchronous HTTP call – offload to thread pool.
+        # Pass code_verifier so Google can validate the PKCE challenge.
+        await asyncio.to_thread(flow.fetch_token, code=code, code_verifier=code_verifier)
         creds = flow.credentials
 
         token_data = {
