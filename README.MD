@@ -96,21 +96,31 @@ Copy the output → `FERNET_KEY`
 
 ## Setup
 
-### 1. Clone and create the environment
+### 1. Clone and install dependencies
+
+With [uv](https://github.com/astral-sh/uv) (recommended):
+
+```bash
+git clone <repo>
+cd gigs_bot
+uv sync
+```
+
+`uv sync` creates the virtualenv and installs all dependencies automatically.
+No manual activation needed — prefix subsequent commands with `uv run`.
+
+<details>
+<summary>Without uv (plain pip)</summary>
 
 ```bash
 git clone <repo>
 cd gigs_bot
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
-Or with [uv](https://github.com/astral-sh/uv) (faster):
-
-```bash
-uv venv && uv pip install -e .
-```
+</details>
 
 ### 2. Configure environment variables
 
@@ -146,7 +156,7 @@ Postgres is available on port `5432`, Redis on `6379`.
 ### 4. Run the bot
 
 ```bash
-python main.py
+uv run python main.py
 ```
 
 Database tables are created automatically on first start.
