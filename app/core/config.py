@@ -15,9 +15,9 @@ class Settings(BaseSettings):
     google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
     google_scopes: list[str] = ["https://www.googleapis.com/auth/calendar"]
 
-    # Gemini
-    gemini_api_key: str = ""
-    gemini_model: str = "gemini-1.5-flash"
+    # OpenAI
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
 
     # PostgreSQL  (asyncpg driver)
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5433/gigs_bot"

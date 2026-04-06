@@ -1,10 +1,10 @@
-"""Free-text mode: route plain messages through the Gemini agent."""
+"""Free-text mode: route plain messages through the AI agent."""
 
 from aiogram import F, Router
 from aiogram.types import Message
 
+from app.services.ai_agent import ai_agent
 from app.services.auth_service import auth_service
-from app.services.gemini_agent import gemini_agent
 
 router = Router(name="text_mode")
 
@@ -29,5 +29,5 @@ async def handle_free_text(message: Message) -> None:
         return
 
     thinking = await message.answer("🤔 Thinking…")
-    reply = await gemini_agent.process_message(user_id, message.text)
+    reply = await ai_agent.process_message(user_id, message.text)
     await thinking.edit_text(reply)

@@ -3,7 +3,7 @@
 Telegram bot for managing Google Calendar. Supports two modes:
 
 - **Button mode** — deterministic FSM navigation via inline keyboards
-- **AI mode** — free-text input processed by Gemini with calendar tool calls
+- **AI mode** — free-text input processed by OpenAI with calendar tool calls
 
 CRUD: create, read, update, delete calendar events.
 
@@ -17,7 +17,7 @@ CRUD: create, read, update, delete calendar events.
 | Backend | FastAPI + uvicorn |
 | Database | PostgreSQL + SQLAlchemy 2 async |
 | Cache / FSM | Redis |
-| AI | Gemini (google-genai SDK) |
+| AI | OpenAI (openai SDK) |
 | Calendar | Google Calendar API v3 |
 
 ---
@@ -29,7 +29,7 @@ app/
 ├── core/          config, token encryption (Fernet)
 ├── db/            SQLAlchemy engine, ORM models
 ├── cache/         Redis client factory
-├── services/      auth, calendar, Gemini agent
+├── services/      auth, calendar, AI agent
 ├── api/           FastAPI app + routers (OAuth callback, events CRUD)
 └── bot/           aiogram handlers, FSM states, keyboards, middleware
 main.py            entry point — runs bot + API in one asyncio loop
@@ -70,14 +70,14 @@ main.py            entry point — runs bot + API in one asyncio loop
 
 ---
 
-### 3. Gemini API key
+### 3. OpenAI API key
 
-1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey)
-2. Click **Create API key**
-3. Copy the key → `GEMINI_API_KEY`
+1. Go to [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+2. Click **Create new secret key**
+3. Copy the key → `OPENAI_API_KEY`
 
-Default model is `gemini-1.5-flash` (fast, cheap). Change `GEMINI_MODEL` to
-`gemini-1.5-pro` or `gemini-2.0-flash` if you need better reasoning.
+Default model is `gpt-4o-mini` (fast, cheap). Change `OPENAI_MODEL` to
+`gpt-4o` if you need better reasoning.
 
 ---
 
@@ -135,8 +135,8 @@ TELEGRAM_BOT_TOKEN=7123456789:AAH...
 GOOGLE_CLIENT_ID=123456789-abc.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=GOCSPX-...
 GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback
-GEMINI_API_KEY=AIzaSy...
-GEMINI_MODEL=gemini-1.5-flash
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/gigs_bot
 REDIS_URL=redis://localhost:6379/0
 FERNET_KEY=<output of the generate command above>
