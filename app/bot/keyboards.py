@@ -45,11 +45,15 @@ def main_menu_kb(mode: str = "button") -> InlineKeyboardMarkup:
 
 
 def calendars_kb(calendars: list[CalendarRead]) -> InlineKeyboardMarkup:
-    """One button per calendar; primary is marked with a star."""
+    """One button per calendar; primary is marked with a star.
+
+    Uses a numeric index as callback_data to stay within Telegram's 64-byte limit
+    (calendar IDs are email-style strings that can easily exceed it).
+    """
     b = InlineKeyboardBuilder()
-    for cal in calendars:
+    for i, cal in enumerate(calendars):
         label = f"{'★ ' if cal.primary else ''}{cal.name[:40]}"
-        b.row(InlineKeyboardButton(text=label, callback_data=f"cal_pick:{cal.calendar_id}"))
+        b.row(InlineKeyboardButton(text=label, callback_data=f"cal_pick:{i}"))
     b.row(InlineKeyboardButton(text="🔙 Back", callback_data="main_menu"))
     return b.as_markup()
 

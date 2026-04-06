@@ -77,7 +77,12 @@ async def cb_select_calendar(callback: CallbackQuery, state: FSMContext) -> None
         await callback.answer(str(exc), show_alert=True)
         return
 
+    # Store calendar list in FSM so the pick handler can resolve index → id
     await state.set_state(SelectCalendarFSM.selecting)
+    await state.update_data(
+        cal_ids=[c.calendar_id for c in calendars],
+        cal_names=[c.name for c in calendars],
+    )
     await msg.edit_text("📆 Choose a calendar:", reply_markup=calendars_kb(calendars))
     await callback.answer()
 
@@ -89,13 +94,20 @@ async def fsm_cal_pick(callback: CallbackQuery, state: FSMContext) -> None:
         return
     user_id, msg = ctx
 
-    calendar_id = callback.data.split(":", 1)[1]
+    index = int(callback.data.split(":", 1)[1])
+    data = await state.get_data()
+    cal_ids: list[str] = data.get("cal_ids", [])
+    cal_names: list[str] = data.get("cal_names", [])
+    if index >= len(cal_ids):
+        await callback.answer("Invalid selection", show_alert=True)
+        return
+
+    calendar_id = cal_ids[index]
+    display = cal_names[index] if index < len(cal_names) else calendar_id
     await auth_service.set_calendar_id(user_id, calendar_id)
     await state.clear()
 
     mode = await auth_service.get_user_mode(user_id)
-    # Show short name: strip the email suffix if it looks like one
-    display = calendar_id.split("@")[0] if "@" in calendar_id else calendar_id
     await msg.edit_text(
         f"✅ Calendar set to <b>{display}</b>",
         reply_markup=main_menu_kb(mode),
