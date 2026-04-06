@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
 
+class CalendarRead(BaseModel):
+    calendar_id: str
+    name: str
+    primary: bool = False
+
+
 class EventCreate(BaseModel):
     summary: str
     start: datetime
@@ -100,9 +106,31 @@ def _parse_event(raw: dict) -> EventRead:
 
 
 class CalendarService:
+    async def list_calendars(self, credentials: Credentials) -> list[CalendarRead]:
+        """Return all calendars in the user's calendar list."""
+
+        def _call() -> list[dict]:
+            svc = _make_service(credentials)
+            return svc.calendarList().list().execute().get("items", [])
+
+        try:
+            items: list[dict] = await asyncio.to_thread(_call)
+        except HttpError as exc:
+            raise RuntimeError(f"Google Calendar error: {exc.status_code} {exc.reason}") from exc
+
+        return [
+            CalendarRead(
+                calendar_id=item["id"],
+                name=item.get("summary", item["id"]),
+                primary=item.get("primary", False),
+            )
+            for item in items
+        ]
+
     async def list_events(
         self,
         credentials: Credentials,
+        calendar_id: str = "primary",
         max_results: int = 10,
         time_min: datetime | None = None,
         time_max: datetime | None = None,
@@ -114,7 +142,7 @@ class CalendarService:
         def _call() -> list[dict]:
             svc = _make_service(credentials)
             kwargs: dict = {
-                "calendarId": "primary",
+                "calendarId": calendar_id,
                 "maxResults": max_results,
                 "timeMin": time_min_str,
                 "singleEvents": True,
@@ -133,7 +161,12 @@ class CalendarService:
 
         return [_parse_event(item) for item in items]
 
-    async def create_event(self, credentials: Credentials, event: EventCreate) -> EventRead:
+    async def create_event(
+        self,
+        credentials: Credentials,
+        event: EventCreate,
+        calendar_id: str = "primary",
+    ) -> EventRead:
         def _call() -> dict:
             svc = _make_service(credentials)
             body: dict = {
@@ -145,7 +178,7 @@ class CalendarService:
                 body["description"] = event.description
             if event.location:
                 body["location"] = event.location
-            return svc.events().insert(calendarId="primary", body=body).execute()
+            return svc.events().insert(calendarId=calendar_id, body=body).execute()
 
         try:
             raw: dict = await asyncio.to_thread(_call)
@@ -154,11 +187,16 @@ class CalendarService:
 
         return _parse_event(raw)
 
-    async def update_event(self, credentials: Credentials, event: EventUpdate) -> EventRead:
+    async def update_event(
+        self,
+        credentials: Credentials,
+        event: EventUpdate,
+        calendar_id: str = "primary",
+    ) -> EventRead:
         def _call() -> dict:
             svc = _make_service(credentials)
             existing: dict = (
-                svc.events().get(calendarId="primary", eventId=event.event_id).execute()
+                svc.events().get(calendarId=calendar_id, eventId=event.event_id).execute()
             )
             if event.summary is not None:
                 existing["summary"] = event.summary
@@ -172,7 +210,7 @@ class CalendarService:
                 existing["location"] = event.location
             return (
                 svc.events()
-                .update(calendarId="primary", eventId=event.event_id, body=existing)
+                .update(calendarId=calendar_id, eventId=event.event_id, body=existing)
                 .execute()
             )
 
@@ -183,10 +221,15 @@ class CalendarService:
 
         return _parse_event(raw)
 
-    async def delete_event(self, credentials: Credentials, event_id: str) -> None:
+    async def delete_event(
+        self,
+        credentials: Credentials,
+        event_id: str,
+        calendar_id: str = "primary",
+    ) -> None:
         def _call() -> None:
             svc = _make_service(credentials)
-            svc.events().delete(calendarId="primary", eventId=event_id).execute()
+            svc.events().delete(calendarId=calendar_id, eventId=event_id).execute()
 
         try:
             await asyncio.to_thread(_call)

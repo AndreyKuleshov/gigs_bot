@@ -151,10 +151,13 @@ class AIAgent:
         if credentials is None:
             return "Error: user is not authenticated with Google. Ask them to run /auth."
 
+        calendar_id = await auth_service.get_calendar_id(user_id)
+
         try:
             if name == "read_events":
                 events = await calendar_service.list_events(
                     credentials,
+                    calendar_id=calendar_id,
                     max_results=int(args.get("max_results", 10)),
                     query=args.get("query"),
                 )
@@ -176,7 +179,9 @@ class AIAgent:
                     description=args.get("description"),
                     location=args.get("location"),
                 )
-                created = await calendar_service.create_event(credentials, ev)
+                created = await calendar_service.create_event(
+                    credentials, ev, calendar_id=calendar_id
+                )
                 return f"Created: {created.summary} (ID:{created.event_id})"
 
             if name == "update_event":
@@ -194,11 +199,15 @@ class AIAgent:
                     description=args.get("description"),
                     location=args.get("location"),
                 )
-                updated = await calendar_service.update_event(credentials, up)
+                updated = await calendar_service.update_event(
+                    credentials, up, calendar_id=calendar_id
+                )
                 return f"Updated: {updated.summary}"
 
             if name == "delete_event":
-                await calendar_service.delete_event(credentials, args["event_id"])
+                await calendar_service.delete_event(
+                    credentials, args["event_id"], calendar_id=calendar_id
+                )
                 return f"Deleted event {args['event_id']}."
 
         except (RuntimeError, ValueError) as exc:

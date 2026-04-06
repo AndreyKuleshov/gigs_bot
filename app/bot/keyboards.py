@@ -1,9 +1,27 @@
-"""Inline keyboard builder helpers."""
+"""Keyboard builder helpers — both inline and reply keyboards."""
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from app.services.calendar_service import EventRead
+from app.services.calendar_service import CalendarRead, EventRead
+
+
+def menu_reply_kb() -> ReplyKeyboardMarkup:
+    """Persistent reply keyboard with a single 'Menu' button.
+
+    ``is_persistent=True`` keeps it visible at all times, regardless of
+    inline keyboards being shown or FSM states changing.
+    """
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📋 Menu")]],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
 
 
 def main_menu_kb(mode: str = "button") -> InlineKeyboardMarkup:
@@ -16,12 +34,23 @@ def main_menu_kb(mode: str = "button") -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="✏️ Update event", callback_data="update_event"),
         InlineKeyboardButton(text="🗑 Delete event", callback_data="delete_event"),
     )
+    b.row(InlineKeyboardButton(text="📆 Select calendar", callback_data="select_calendar"))
     if mode == "button":
         b.row(InlineKeyboardButton(text="Switch to 🤖 AI mode", callback_data="switch_to_text"))
     else:
         b.row(
             InlineKeyboardButton(text="Switch to 🔘 Button mode", callback_data="switch_to_button")
         )
+    return b.as_markup()
+
+
+def calendars_kb(calendars: list[CalendarRead]) -> InlineKeyboardMarkup:
+    """One button per calendar; primary is marked with a star."""
+    b = InlineKeyboardBuilder()
+    for cal in calendars:
+        label = f"{'★ ' if cal.primary else ''}{cal.name[:40]}"
+        b.row(InlineKeyboardButton(text=label, callback_data=f"cal_pick:{cal.calendar_id}"))
+    b.row(InlineKeyboardButton(text="🔙 Back", callback_data="main_menu"))
     return b.as_markup()
 
 

@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 _STATE_PREFIX = "oauth_state:"
 _STATE_TTL_SECONDS = 600  # 10 minutes
+_CAL_PREFIX = "user_cal:"
 
 
 def _build_flow() -> Flow:
@@ -167,6 +168,17 @@ class AuthService:
             result = await session.execute(select(User.mode).where(User.id == telegram_user_id))
             row = result.scalar_one_or_none()
         return row if row is not None else "button"
+
+    async def get_calendar_id(self, telegram_user_id: int) -> str:
+        """Return the calendar ID selected by this user, defaulting to 'primary'."""
+        redis = get_redis()
+        val = await redis.get(f"{_CAL_PREFIX}{telegram_user_id}")
+        return val if val else "primary"
+
+    async def set_calendar_id(self, telegram_user_id: int, calendar_id: str) -> None:
+        """Persist the selected calendar ID for this user."""
+        redis = get_redis()
+        await redis.set(f"{_CAL_PREFIX}{telegram_user_id}", calendar_id)
 
     async def set_user_mode(self, telegram_user_id: int, mode: str) -> None:
         async with get_session() as session:

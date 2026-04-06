@@ -20,3 +20,7 @@ class UpdateEventFSM(StatesGroup):
 class DeleteEventFSM(StatesGroup):
     selecting_event = State()
     confirm = State()
+
+
+class SelectCalendarFSM(StatesGroup):
+    selecting = State()

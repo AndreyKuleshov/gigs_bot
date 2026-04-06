@@ -5,7 +5,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.bot.keyboards import main_menu_kb
+from app.bot.keyboards import main_menu_kb, menu_reply_kb
 from app.services.auth_service import auth_service
 
 router = Router(name="common")
@@ -27,8 +27,9 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         f"👋 Hello, {user.first_name}!\n\n"
         "I can help you manage your Google Calendar.\n"
         "Use /auth to connect your Google account.",
-        reply_markup=main_menu_kb(mode),
+        reply_markup=menu_reply_kb(),
     )
+    await message.answer("📋 Main menu:", reply_markup=main_menu_kb(mode))
 
 
 @router.message(Command("auth"))
@@ -49,6 +50,16 @@ async def cmd_auth(message: Message) -> None:
 
 @router.message(Command("menu"))
 async def cmd_menu(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    await state.clear()
+    mode = await auth_service.get_user_mode(message.from_user.id)
+    await message.answer("📋 Main menu:", reply_markup=main_menu_kb(mode))
+
+
+@router.message(F.text == "📋 Menu")
+async def reply_menu_button(message: Message, state: FSMContext) -> None:
+    """Handle the persistent reply-keyboard 'Menu' button."""
     if message.from_user is None:
         return
     await state.clear()

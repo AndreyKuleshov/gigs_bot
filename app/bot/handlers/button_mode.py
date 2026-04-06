@@ -9,12 +9,13 @@ from aiogram.types import CallbackQuery, Message
 
 from app.bot.keyboards import (
     back_kb,
+    calendars_kb,
     confirm_kb,
     events_kb,
     main_menu_kb,
     update_field_kb,
 )
-from app.bot.states import CreateEventFSM, DeleteEventFSM, UpdateEventFSM
+from app.bot.states import CreateEventFSM, DeleteEventFSM, SelectCalendarFSM, UpdateEventFSM
 from app.services.auth_service import auth_service
 from app.services.calendar_service import EventCreate, EventUpdate, calendar_service
 
@@ -53,6 +54,56 @@ async def _check_auth(callback: CallbackQuery) -> bool:
     return True
 
 
+# ── Select calendar ───────────────────────────────────────────────────────────
+
+
+@router.callback_query(F.data == "select_calendar")
+async def cb_select_calendar(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await _check_auth(callback):
+        return
+    ctx = _ctx(callback)
+    if ctx is None:
+        return
+    user_id, msg = ctx
+
+    creds = await auth_service.get_credentials(user_id)
+    if creds is None:
+        await callback.answer("Authentication error", show_alert=True)
+        return
+
+    try:
+        calendars = await calendar_service.list_calendars(creds)
+    except RuntimeError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+
+    await state.set_state(SelectCalendarFSM.selecting)
+    await msg.edit_text("📆 Choose a calendar:", reply_markup=calendars_kb(calendars))
+    await callback.answer()
+
+
+@router.callback_query(SelectCalendarFSM.selecting, F.data.startswith("cal_pick:"))
+async def fsm_cal_pick(callback: CallbackQuery, state: FSMContext) -> None:
+    ctx = _ctx(callback)
+    if ctx is None or callback.data is None:
+        return
+    user_id, msg = ctx
+
+    calendar_id = callback.data.split(":", 1)[1]
+    await auth_service.set_calendar_id(user_id, calendar_id)
+    await state.clear()
+
+    mode = await auth_service.get_user_mode(user_id)
+    # Show short name: strip the email suffix if it looks like one
+    display = calendar_id.split("@")[0] if "@" in calendar_id else calendar_id
+    await msg.edit_text(
+        f"✅ Calendar set to <b>{display}</b>",
+        reply_markup=main_menu_kb(mode),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
 # ── List events ───────────────────────────────────────────────────────────────
 
 
@@ -70,8 +121,10 @@ async def cb_list_events(callback: CallbackQuery) -> None:
         await callback.answer("Authentication error", show_alert=True)
         return
 
+    calendar_id = await auth_service.get_calendar_id(user_id)
+
     try:
-        events = await calendar_service.list_events(creds, max_results=10)
+        events = await calendar_service.list_events(creds, calendar_id=calendar_id, max_results=10)
     except RuntimeError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
@@ -217,6 +270,7 @@ async def fsm_create_confirm(callback: CallbackQuery, state: FSMContext) -> None
         await state.clear()
         return
 
+    calendar_id = await auth_service.get_calendar_id(user_id)
     data = await state.get_data()
     event = EventCreate(
         summary=data["summary"],
@@ -225,7 +279,7 @@ async def fsm_create_confirm(callback: CallbackQuery, state: FSMContext) -> None
         description=data.get("description"),
     )
     try:
-        created = await calendar_service.create_event(creds, event)
+        created = await calendar_service.create_event(creds, event, calendar_id=calendar_id)
         await msg.edit_text(
             f"✅ Event created!\n<b>{created.summary}</b>\n{created.html_link or ''}",
             parse_mode="HTML",
@@ -254,8 +308,10 @@ async def cb_delete_start(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Authentication error", show_alert=True)
         return
 
+    calendar_id = await auth_service.get_calendar_id(user_id)
+
     try:
-        events = await calendar_service.list_events(creds, max_results=10)
+        events = await calendar_service.list_events(creds, calendar_id=calendar_id, max_results=10)
     except RuntimeError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
@@ -309,9 +365,10 @@ async def fsm_delete_confirm(callback: CallbackQuery, state: FSMContext) -> None
         await state.clear()
         return
 
+    calendar_id = await auth_service.get_calendar_id(user_id)
     data = await state.get_data()
     try:
-        await calendar_service.delete_event(creds, data["event_id"])
+        await calendar_service.delete_event(creds, data["event_id"], calendar_id=calendar_id)
         await msg.edit_text("✅ Event deleted.")
     except RuntimeError as exc:
         await msg.edit_text(f"❌ Error: {exc}")
@@ -337,8 +394,10 @@ async def cb_update_start(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Authentication error", show_alert=True)
         return
 
+    calendar_id = await auth_service.get_calendar_id(user_id)
+
     try:
-        events = await calendar_service.list_events(creds, max_results=10)
+        events = await calendar_service.list_events(creds, calendar_id=calendar_id, max_results=10)
     except RuntimeError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
@@ -438,6 +497,7 @@ async def fsm_update_confirm(callback: CallbackQuery, state: FSMContext) -> None
         await state.clear()
         return
 
+    calendar_id = await auth_service.get_calendar_id(user_id)
     data = await state.get_data()
     field = data["field"]
     kwargs: dict = {"event_id": data["event_id"]}
@@ -447,7 +507,9 @@ async def fsm_update_confirm(callback: CallbackQuery, state: FSMContext) -> None
         kwargs[field] = data[field]
 
     try:
-        updated = await calendar_service.update_event(creds, EventUpdate(**kwargs))
+        updated = await calendar_service.update_event(
+            creds, EventUpdate(**kwargs), calendar_id=calendar_id
+        )
         await msg.edit_text(f"✅ Updated: <b>{updated.summary}</b>", parse_mode="HTML")
     except RuntimeError as exc:
         await msg.edit_text(f"❌ Error: {exc}")
