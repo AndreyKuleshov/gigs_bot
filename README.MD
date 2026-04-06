@@ -137,7 +137,7 @@ GOOGLE_CLIENT_SECRET=GOCSPX-...
 GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback
 GEMINI_API_KEY=AIzaSy...
 GEMINI_MODEL=gemini-1.5-flash
-DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/gigs_bot
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/gigs_bot
 REDIS_URL=redis://localhost:6379/0
 FERNET_KEY=<output of the generate command above>
 API_HOST=0.0.0.0
@@ -151,7 +151,7 @@ DEBUG=false
 docker compose up -d
 ```
 
-Postgres is available on port `5432`, Redis on `6379`.
+Postgres is available on port `5433` (mapped to avoid conflicts with a local instance), Redis on `6379`.
 
 ### 4. Run the bot
 
