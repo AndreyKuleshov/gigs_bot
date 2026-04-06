@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-1.5-flash"
 
     # PostgreSQL  (asyncpg driver)
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/gigs_bot"
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5433/gigs_bot"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
