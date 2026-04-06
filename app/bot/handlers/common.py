@@ -1,0 +1,92 @@
+"""/start, /auth, /menu and mode-switch handlers."""
+
+from aiogram import F, Router
+from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+
+from app.bot.keyboards import main_menu_kb
+from app.services.auth_service import auth_service
+
+router = Router(name="common")
+
+
+@router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    user = message.from_user
+    if user is None:
+        return
+    await auth_service.get_or_create_user(
+        telegram_user_id=user.id,
+        username=user.username,
+        full_name=user.full_name,
+    )
+    mode = await auth_service.get_user_mode(user.id)
+    await message.answer(
+        f"👋 Hello, {user.first_name}!\n\n"
+        "I can help you manage your Google Calendar.\n"
+        "Use /auth to connect your Google account.",
+        reply_markup=main_menu_kb(mode),
+    )
+
+
+@router.message(Command("auth"))
+async def cmd_auth(message: Message) -> None:
+    if message.from_user is None:
+        return
+    user_id = message.from_user.id
+    if await auth_service.is_authenticated(user_id):
+        await message.answer("✅ Your Google account is already connected.")
+        return
+    auth_url = await auth_service.get_auth_url(user_id)
+    await message.answer(
+        "🔐 Connect your Google Calendar:\n\n"
+        f"{auth_url}\n\n"
+        "After authorisation you will be redirected back automatically."
+    )
+
+
+@router.message(Command("menu"))
+async def cmd_menu(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    await state.clear()
+    mode = await auth_service.get_user_mode(message.from_user.id)
+    await message.answer("📋 Main menu:", reply_markup=main_menu_kb(mode))
+
+
+@router.message(Command("disconnect"))
+async def cmd_disconnect(message: Message) -> None:
+    if message.from_user is None:
+        return
+    await auth_service.revoke_tokens(message.from_user.id)
+    await message.answer("🔓 Google Calendar disconnected.")
+
+
+@router.callback_query(F.data == "main_menu")
+async def cb_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or not isinstance(callback.message, Message):
+        return
+    await state.clear()
+    mode = await auth_service.get_user_mode(callback.from_user.id)
+    await callback.message.edit_text("📋 Main menu:", reply_markup=main_menu_kb(mode))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "switch_to_text")
+async def cb_switch_to_text(callback: CallbackQuery) -> None:
+    if callback.from_user is None or not isinstance(callback.message, Message):
+        return
+    await auth_service.set_user_mode(callback.from_user.id, "text")
+    await callback.message.edit_reply_markup(reply_markup=main_menu_kb("text"))
+    await callback.answer("Switched to 🤖 AI mode")
+
+
+@router.callback_query(F.data == "switch_to_button")
+async def cb_switch_to_button(callback: CallbackQuery) -> None:
+    if callback.from_user is None or not isinstance(callback.message, Message):
+        return
+    await auth_service.set_user_mode(callback.from_user.id, "button")
+    await callback.message.edit_reply_markup(reply_markup=main_menu_kb("button"))
+    await callback.answer("Switched to 🔘 Button mode")
