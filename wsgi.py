@@ -124,16 +124,59 @@ def application(environ, start_response):  # type: ignore[no-untyped-def]
     if path == "/health":
         return respond("200 OK", b'{"status":"ok"}')
 
-    # ── Debug: connectivity test ───────────────────────────────────────────────
+    # ── Debug: event loop + connectivity tests ────────────────────────────────
     if path == "/debug/aiohttp":
+        import asyncio as _asyncio
         import json as _json
 
+        results: dict = {}
+
+        # 1. Is the event loop alive?
+        async def _ping():
+            await _asyncio.sleep(0)
+            return "ok"
+
         try:
-            results = _run(_check_bot(), timeout=30)
-            return respond("200 OK", _json.dumps(results).encode())
+            results["loop"] = _run(_ping(), timeout=3)
         except Exception as exc:
-            body_str = _json.dumps({"error": str(exc), "type": type(exc).__name__})
-            return respond("500 Internal Server Error", body_str.encode())
+            results["loop"] = f"DEAD: {type(exc).__name__}: {exc}"
+            return respond("200 OK", _json.dumps(results).encode())
+
+        # 2. aiohttp direct (no proxy, 8s)
+        async def _direct():
+            import aiohttp
+
+            url = f"https://api.telegram.org/bot{_bot.token}/getMe"
+            t = aiohttp.ClientTimeout(total=8)
+            async with aiohttp.ClientSession(timeout=t) as s:
+                async with s.get(url) as r:
+                    return f"HTTP {r.status}"
+
+        try:
+            results["direct"] = _run(_direct(), timeout=10)
+        except Exception as exc:
+            results["direct"] = f"{type(exc).__name__}: {exc}"
+
+        # 3. aiohttp via proxy (8s)
+        proxy_url = os.environ.get("https_proxy") or os.environ.get("http_proxy")
+        results["proxy_url"] = proxy_url
+
+        async def _via_proxy():
+            import aiohttp
+
+            url = f"https://api.telegram.org/bot{_bot.token}/getMe"
+            t = aiohttp.ClientTimeout(total=8)
+            async with aiohttp.ClientSession(timeout=t) as s:
+                async with s.get(url, proxy=proxy_url) as r:
+                    return f"HTTP {r.status}"
+
+        if proxy_url:
+            try:
+                results["proxy"] = _run(_via_proxy(), timeout=10)
+            except Exception as exc:
+                results["proxy"] = f"{type(exc).__name__}: {exc}"
+
+        return respond("200 OK", _json.dumps(results).encode())
 
     # ── Telegram webhook ───────────────────────────────────────────────────────
     if method == "POST" and path == "/webhook/telegram":
