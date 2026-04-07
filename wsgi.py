@@ -13,8 +13,10 @@ update in a daemon thread so uWSGI is never blocked by bot I/O.
 import asyncio
 import json
 import logging
-import socket as _socket
+import os
+import sys
 import threading
+import urllib.request
 from urllib.parse import parse_qs
 
 from app.bot.setup import create_bot, create_dispatcher
@@ -43,12 +45,18 @@ _bot = create_bot()
 _dp = create_dispatcher()
 
 # ── Connectivity check ─────────────────────────────────────────────────────────
+_proxy = (
+    os.environ.get("HTTPS_PROXY")
+    or os.environ.get("https_proxy")
+    or os.environ.get("HTTP_PROXY")
+    or os.environ.get("http_proxy")
+)
+print(f"STARTUP CHECK: proxy env={_proxy!r}", file=sys.stderr, flush=True)
 try:
-    _s = _socket.create_connection(("api.telegram.org", 443), timeout=5)
-    _s.close()
-    logger.error("STARTUP CHECK: api.telegram.org is REACHABLE from web worker")
+    urllib.request.urlopen("https://api.telegram.org", timeout=5)
+    print("STARTUP CHECK: HTTP to api.telegram.org OK", file=sys.stderr, flush=True)
 except Exception as _e:
-    logger.error("STARTUP CHECK: api.telegram.org is NOT REACHABLE: %s", _e)
+    print(f"STARTUP CHECK: HTTP to api.telegram.org FAILED: {_e}", file=sys.stderr, flush=True)
 
 
 # ── HTML templates ─────────────────────────────────────────────────────────────
