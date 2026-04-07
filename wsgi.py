@@ -6,8 +6,10 @@ Handles the four routes the bot uses:
   GET  /auth/google
   GET  /auth/google/callback
 
-The webhook handler returns 200 immediately and processes the Telegram
-update in a daemon thread so uWSGI is never blocked by bot I/O.
+Each async operation runs in its own asyncio.run() call so there is no
+shared persistent event loop that can become stuck or corrupted between
+requests.  The webhook handler returns 200 immediately and processes the
+Telegram update in a daemon thread.
 """
 
 import asyncio
@@ -24,60 +26,22 @@ from app.db.base import create_tables
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ── Persistent event loop ──────────────────────────────────────────────────────
-# A single event loop running in a background thread. All async calls go through
-# run_coroutine_threadsafe so aiogram's aiohttp session is never reused across
-# different loops (which causes silent 502s under uWSGI).
-_loop = asyncio.new_event_loop()
-threading.Thread(target=_loop.run_forever, daemon=True).start()
-
-
-def _run(coro, timeout: int = 60):  # type: ignore[no-untyped-def]
-    """Submit a coroutine to the persistent loop and block until done."""
-    return asyncio.run_coroutine_threadsafe(coro, _loop).result(timeout=timeout)
-
-
 # ── Eager initialisation ───────────────────────────────────────────────────────
-_run(create_tables())
-_bot = create_bot()
-_dp = create_dispatcher()
+asyncio.run(create_tables())
+_dp = create_dispatcher()  # shared; stateless except MemoryStorage (asyncio-safe)
 
 
-# ── Connectivity check (bot getMe from within the persistent loop) ────────────
-async def _check_bot() -> dict:
-    import aiohttp
+# ── Async helpers ──────────────────────────────────────────────────────────────
+async def _feed_update(body: bytes) -> None:
+    """Parse and dispatch one Telegram update, then close the bot session."""
+    from aiogram.types import Update
 
-    results: dict = {}
-
-    # 1. Raw aiohttp without proxy
-    url = f"https://api.telegram.org/bot{_bot.token}/getMe"
+    bot = create_bot()
     try:
-        timeout = aiohttp.ClientTimeout(total=8)
-        async with aiohttp.ClientSession(timeout=timeout) as sess:
-            async with sess.get(url) as resp:
-                results["direct"] = f"HTTP {resp.status}"
-    except Exception as exc:
-        results["direct"] = f"FAIL {type(exc).__name__}: {exc}"
-
-    # 2. Raw aiohttp through proxy
-    proxy_url = os.environ.get("https_proxy") or os.environ.get("http_proxy")
-    if proxy_url:
-        try:
-            timeout = aiohttp.ClientTimeout(total=8)
-            async with aiohttp.ClientSession(timeout=timeout) as sess:
-                async with sess.get(url, proxy=proxy_url) as resp:
-                    results["proxy_raw"] = f"HTTP {resp.status}"
-        except Exception as exc:
-            results["proxy_raw"] = f"FAIL {type(exc).__name__}: {exc}"
-
-    # 3. Bot session (aiogram, uses AiohttpSession with proxy if configured)
-    try:
-        me = await _bot.get_me()
-        results["bot"] = f"ok bot=@{me.username}"
-    except Exception as exc:
-        results["bot"] = f"FAIL {type(exc).__name__}: {exc}"
-
-    return results
+        update = Update.model_validate(json.loads(body))
+        await _dp.feed_update(bot, update)
+    finally:
+        await bot.session.close()
 
 
 # ── HTML templates ─────────────────────────────────────────────────────────────
@@ -124,59 +88,43 @@ def application(environ, start_response):  # type: ignore[no-untyped-def]
     if path == "/health":
         return respond("200 OK", b'{"status":"ok"}')
 
-    # ── Debug: event loop + connectivity tests ────────────────────────────────
+    # ── Debug: connectivity test ───────────────────────────────────────────────
     if path == "/debug/aiohttp":
-        import asyncio as _asyncio
-        import json as _json
 
-        results: dict = {}
-
-        # 1. Is the event loop alive?
-        async def _ping():
-            await _asyncio.sleep(0)
-            return "ok"
-
-        try:
-            results["loop"] = _run(_ping(), timeout=3)
-        except Exception as exc:
-            results["loop"] = f"DEAD: {type(exc).__name__}: {exc}"
-            return respond("200 OK", _json.dumps(results).encode())
-
-        # 2. aiohttp direct (no proxy, 8s)
-        async def _direct():
+        async def _debug() -> dict:
             import aiohttp
 
-            url = f"https://api.telegram.org/bot{_bot.token}/getMe"
+            results: dict = {}
+            proxy_url = os.environ.get("https_proxy") or os.environ.get("http_proxy")
+            results["proxy_url"] = proxy_url
+            token = settings.telegram_bot_token
+            url = f"https://api.telegram.org/bot{token}/getMe"
             t = aiohttp.ClientTimeout(total=8)
-            async with aiohttp.ClientSession(timeout=t) as s:
-                async with s.get(url) as r:
-                    return f"HTTP {r.status}"
 
-        try:
-            results["direct"] = _run(_direct(), timeout=10)
-        except Exception as exc:
-            results["direct"] = f"{type(exc).__name__}: {exc}"
-
-        # 3. aiohttp via proxy (8s)
-        proxy_url = os.environ.get("https_proxy") or os.environ.get("http_proxy")
-        results["proxy_url"] = proxy_url
-
-        async def _via_proxy():
-            import aiohttp
-
-            url = f"https://api.telegram.org/bot{_bot.token}/getMe"
-            t = aiohttp.ClientTimeout(total=8)
-            async with aiohttp.ClientSession(timeout=t) as s:
-                async with s.get(url, proxy=proxy_url) as r:
-                    return f"HTTP {r.status}"
-
-        if proxy_url:
+            # Direct (no proxy)
             try:
-                results["proxy"] = _run(_via_proxy(), timeout=10)
+                async with aiohttp.ClientSession(timeout=t) as s:
+                    async with s.get(url) as r:
+                        results["direct"] = f"HTTP {r.status}"
             except Exception as exc:
-                results["proxy"] = f"{type(exc).__name__}: {exc}"
+                results["direct"] = f"{type(exc).__name__}: {exc}"
 
-        return respond("200 OK", _json.dumps(results).encode())
+            # Via proxy
+            if proxy_url:
+                try:
+                    async with aiohttp.ClientSession(timeout=t) as s:
+                        async with s.get(url, proxy=proxy_url) as r:
+                            results["proxy"] = f"HTTP {r.status}"
+                except Exception as exc:
+                    results["proxy"] = f"{type(exc).__name__}: {exc}"
+
+            return results
+
+        try:
+            results = asyncio.run(_debug())
+            return respond("200 OK", json.dumps(results).encode())
+        except Exception as exc:
+            return respond("500 Internal Server Error", json.dumps({"error": str(exc)}).encode())
 
     # ── Telegram webhook ───────────────────────────────────────────────────────
     if method == "POST" and path == "/webhook/telegram":
@@ -189,13 +137,8 @@ def application(environ, start_response):  # type: ignore[no-untyped-def]
 
         def process():
             try:
-                from aiogram.types import Update
-
-                proxy_vars = {k: v for k, v in os.environ.items() if "proxy" in k.lower()}
-                logger.error("PROXY ENV: %s", proxy_vars)
-                update = Update.model_validate(json.loads(body))
-                _run(_dp.feed_update(_bot, update))
-                logger.info("Update %s processed OK", update.update_id)
+                asyncio.run(_feed_update(body))
+                logger.info("Update processed OK")
             except Exception:
                 logger.exception("Webhook processing error")
 
@@ -211,7 +154,7 @@ def application(environ, start_response):  # type: ignore[no-untyped-def]
         try:
             from app.services.auth_service import auth_service
 
-            auth_url = _run(auth_service.get_auth_url(user_id))
+            auth_url = asyncio.run(auth_service.get_auth_url(user_id))
             return redirect(auth_url)
         except Exception as exc:
             logger.error("Auth start error: %s", exc)
@@ -234,7 +177,7 @@ def application(environ, start_response):  # type: ignore[no-untyped-def]
         try:
             from app.services.auth_service import auth_service
 
-            _run(auth_service.handle_oauth_callback(code=code, state=state))
+            asyncio.run(auth_service.handle_oauth_callback(code=code, state=state))
             return respond("200 OK", _SUCCESS_HTML, "text/html; charset=utf-8")
         except ValueError as exc:
             html = _ERROR_HTML.format(reason=str(exc)).encode()

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 
@@ -18,12 +18,14 @@ _ssl_required = "sslmode=require" in settings.database_url
 _is_sqlite = _db_url.startswith("sqlite")
 
 if _is_sqlite:
-    # SQLite requires StaticPool for async use and check_same_thread=False
+    # NullPool creates a fresh connection per operation — required when multiple
+    # asyncio.run() calls share the same engine (each call has its own event
+    # loop, so a pooled connection object would be bound to the wrong loop).
     engine = create_async_engine(
         _db_url,
         echo=settings.debug,
         connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
+        poolclass=NullPool,
     )
 else:
     engine = create_async_engine(
