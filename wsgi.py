@@ -101,8 +101,8 @@ def application(environ, start_response):  # type: ignore[no-untyped-def]
 
                 update = Update.model_validate(json.loads(body))
                 _run(_dp.feed_update(_bot, update))
-            except Exception as exc:
-                logger.error("Webhook processing error: %s", exc)
+            except Exception:
+                logger.exception("Webhook processing error")
 
         threading.Thread(target=process, daemon=True).start()
         return respond("200 OK", b'{"ok":true}')
