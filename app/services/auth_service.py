@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.core.security import decrypt_json, encrypt_json
@@ -25,6 +26,11 @@ from app.db.models import OAuthState, User
 logger = logging.getLogger(__name__)
 
 _STATE_TTL_SECONDS = 600  # 10 minutes
+
+
+def _utcnow() -> datetime:
+    """Return current UTC time as a naive datetime (compatible with SQLite)."""
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _build_flow() -> Flow:
@@ -58,15 +64,13 @@ class AuthService:
         # can complete the token exchange without a separate Redis store.
         async with get_session() as session:
             # Clean up any expired states first
-            await session.execute(
-                delete(OAuthState).where(OAuthState.expires_at < datetime.now(UTC))
-            )
+            await session.execute(delete(OAuthState).where(OAuthState.expires_at < _utcnow()))
             session.add(
                 OAuthState(
                     state=state,
                     telegram_user_id=telegram_user_id,
                     code_verifier=flow.code_verifier or "",
-                    expires_at=datetime.now(UTC) + timedelta(seconds=_STATE_TTL_SECONDS),
+                    expires_at=_utcnow() + timedelta(seconds=_STATE_TTL_SECONDS),
                 )
             )
         return auth_url
@@ -79,7 +83,7 @@ class AuthService:
         """
         async with get_session() as session:
             oauth_state = await session.get(OAuthState, state)
-            if oauth_state is None or oauth_state.expires_at < datetime.now(UTC):
+            if oauth_state is None or oauth_state.expires_at < _utcnow():
                 if oauth_state is not None:
                     await session.delete(oauth_state)
                 raise ValueError("OAuth state is expired or invalid")
@@ -182,7 +186,12 @@ class AuthService:
                     full_name=full_name,
                 )
                 session.add(user)
-        return user
+                try:
+                    await session.flush()
+                except IntegrityError:
+                    await session.rollback()
+                    user = await session.get(User, telegram_user_id)
+        return user  # type: ignore[return-value]
 
     async def get_user_mode(self, telegram_user_id: int) -> str:
         async with get_session() as session:

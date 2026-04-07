@@ -1,4 +1,4 @@
-"""OpenAI LLM agent with Google Calendar function calling.
+"""OpenAI LLM agent with Google Calendar function calling and web search.
 
 Design notes:
 - Multi-turn conversation; function calls are executed locally and results
@@ -8,8 +8,10 @@ Design notes:
 - A hard cap of _MAX_TOOL_ROUNDS prevents runaway API calls.
 """
 
+import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from openai import AsyncOpenAI
@@ -25,7 +27,14 @@ from app.services.calendar_service import (
 
 logger = logging.getLogger(__name__)
 
-_MAX_TOOL_ROUNDS = 5
+_MAX_TOOL_ROUNDS = 8
+
+
+@dataclass
+class AgentResponse:
+    text: str
+    image_url: str | None = None
+
 
 _SYSTEM_PROMPT = (
     "You are a helpful calendar assistant. Today is {now}.\n"
@@ -35,7 +44,15 @@ _SYSTEM_PROMPT = (
     "update_event or delete_event.\n"
     "- When creating events, always ask for both start and end times if not given.\n"
     "- Respond in the same language the user uses.\n"
-    "- Be concise."
+    "- Be concise.\n"
+    "- Format responses using Telegram HTML: <b>bold</b>, <i>italic</i>, "
+    "<code>code</code>. Use <b> for event titles and dates. Use bullet lists with •.\n"
+    "- When the user asks WHEN something is (e.g. 'когда skillet?', 'when is the concert?'), "
+    "ALWAYS call read_events first to check their calendar before searching the web.\n"
+    "- Use web_search to look up additional info about events, venues, or artists "
+    "AFTER checking the calendar, or when the user asks for facts not in the calendar.\n"
+    "- Use find_event_image only when the user explicitly asks for a photo/image, "
+    "or when it clearly adds value. Do not call it speculatively."
 )
 
 _TOOLS: list[dict] = [
@@ -149,7 +166,84 @@ _TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Search the web for current information about events, venues, artists, "
+                "or any topic. Use when the user asks about something you don't know."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query."},
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Number of results to return (default 5, max 10).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_event_image",
+            "description": (
+                "Find a photo image for an event, artist, or venue. "
+                "Returns an image URL that will be displayed to the user. "
+                "Use only when a photo clearly adds value."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Descriptive image search query, e.g. 'Skillet band concert'.",  # noqa: E501
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
+
+
+def _ddgs_text_sync(query: str, max_results: int) -> list[dict]:
+    from duckduckgo_search import DDGS
+
+    with DDGS() as ddgs:
+        return list(ddgs.text(query, max_results=max_results))
+
+
+def _ddgs_images_sync(query: str) -> list[dict]:
+    from duckduckgo_search import DDGS
+
+    with DDGS() as ddgs:
+        return list(ddgs.images(query, type_image="photo", size="Large", max_results=5))
+
+
+async def _web_search(query: str, max_results: int = 5) -> str:
+    try:
+        results = await asyncio.to_thread(_ddgs_text_sync, query, max_results)
+    except Exception as exc:
+        logger.warning("web_search failed: %s", exc)
+        return "Search temporarily unavailable."
+    if not results:
+        return "No results found."
+    lines = [f"{r['title']}\n{r['href']}\n{r['body']}" for r in results]
+    return "\n\n".join(lines)
+
+
+async def _find_event_image(query: str) -> str | None:
+    try:
+        results = await asyncio.to_thread(_ddgs_images_sync, query)
+    except Exception as exc:
+        logger.warning("find_event_image failed: %s", exc)
+        return None
+    return results[0]["image"] if results else None
 
 
 class AIAgent:
@@ -163,7 +257,22 @@ class AIAgent:
             self._client = AsyncOpenAI(api_key=settings.openai_api_key)
         return self._client
 
-    async def _execute_tool(self, user_id: int, name: str, args: dict) -> str:
+    async def _execute_tool(
+        self, user_id: int, name: str, args: dict, image_holder: list[str]
+    ) -> str:
+        if name == "web_search":
+            return await _web_search(
+                query=args.get("query", ""),
+                max_results=min(int(args.get("max_results", 5)), 10),
+            )
+
+        if name == "find_event_image":
+            url = await _find_event_image(args.get("query", ""))
+            if url:
+                image_holder.append(url)
+                return "Image found and will be displayed to the user."
+            return "No suitable image found."
+
         credentials = await auth_service.get_credentials(user_id)
         if credentials is None:
             return "Error: user is not authenticated with Google. Ask them to run /auth."
@@ -241,12 +350,14 @@ class AIAgent:
 
         return f"Unknown tool: {name}"
 
-    async def process_message(self, user_id: int, message: str) -> str:
+    async def process_message(self, user_id: int, message: str) -> AgentResponse:
         """Run a free-text message through the AI model and return the final reply."""
         try:
             client = self._get_client()
         except RuntimeError as exc:
-            return str(exc)
+            return AgentResponse(text=str(exc))
+
+        image_holder: list[str] = []
 
         system_text = _SYSTEM_PROMPT.format(now=datetime.now(tz=UTC).isoformat())
         messages: list[ChatCompletionMessageParam] = [
@@ -264,7 +375,7 @@ class AIAgent:
                 )
             except Exception as exc:
                 logger.error("OpenAI chat.completions error: %s", exc)
-                return "Sorry, I couldn't reach the AI service right now."
+                return AgentResponse(text="Sorry, I couldn't reach the AI service right now.")
 
             choice = response.choices[0]
             messages.append(choice.message.model_dump(exclude_unset=True))  # type: ignore[arg-type]
@@ -279,7 +390,9 @@ class AIAgent:
                     args = json.loads(tc.function.arguments)
                 except json.JSONDecodeError:
                     args = {}
-                tool_result = await self._execute_tool(user_id, tc.function.name, args)
+                tool_result = await self._execute_tool(
+                    user_id, tc.function.name, args, image_holder
+                )
                 messages.append(
                     {
                         "role": "tool",
@@ -289,7 +402,10 @@ class AIAgent:
                 )
 
         last = response.choices[0].message.content  # type: ignore[possibly-undefined]
-        return last or "I couldn't generate a response."
+        return AgentResponse(
+            text=last or "I couldn't generate a response.",
+            image_url=image_holder[0] if image_holder else None,
+        )
 
 
 ai_agent = AIAgent()
