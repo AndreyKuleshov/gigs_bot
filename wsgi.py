@@ -23,19 +23,23 @@ from app.db.base import create_tables
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ── Persistent event loop ──────────────────────────────────────────────────────
+# A single event loop running in a background thread. All async calls go through
+# run_coroutine_threadsafe so aiogram's aiohttp session is never reused across
+# different loops (which causes silent 502s under uWSGI).
+_loop = asyncio.new_event_loop()
+threading.Thread(target=_loop.run_forever, daemon=True).start()
+
+
+def _run(coro, timeout: int = 60):  # type: ignore[no-untyped-def]
+    """Submit a coroutine to the persistent loop and block until done."""
+    return asyncio.run_coroutine_threadsafe(coro, _loop).result(timeout=timeout)
+
+
 # ── Eager initialisation ───────────────────────────────────────────────────────
-asyncio.run(create_tables())
+_run(create_tables())
 _bot = create_bot()
 _dp = create_dispatcher()
-
-
-def _run(coro):  # type: ignore[no-untyped-def]
-    """Run an async coroutine in a fresh event loop (safe from any thread)."""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
 
 
 # ── HTML templates ─────────────────────────────────────────────────────────────
