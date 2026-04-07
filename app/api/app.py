@@ -64,6 +64,8 @@ def create_app() -> FastAPI:
 
     @app.post("/webhook/telegram", tags=["ops"])
     async def telegram_webhook(request: Request) -> dict:
+        import asyncio
+
         if settings.webhook_secret:
             token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
             if token != settings.webhook_secret:
@@ -71,7 +73,9 @@ def create_app() -> FastAPI:
 
         data = await request.json()
         update = Update.model_validate(data)
-        await request.app.state.dp.feed_update(request.app.state.bot, update)
+        # Fire-and-forget: return 200 immediately so Telegram doesn't retry.
+        # Processing (including outbound API calls) happens in the background.
+        asyncio.create_task(request.app.state.dp.feed_update(request.app.state.bot, update))
         return {"ok": True}
 
     return app
