@@ -14,9 +14,7 @@ import asyncio
 import json
 import logging
 import os
-import sys
 import threading
-import urllib.request
 from urllib.parse import parse_qs
 
 from app.bot.setup import create_bot, create_dispatcher
@@ -44,19 +42,24 @@ _run(create_tables())
 _bot = create_bot()
 _dp = create_dispatcher()
 
-# ── Connectivity check ─────────────────────────────────────────────────────────
-_proxy = (
-    os.environ.get("HTTPS_PROXY")
-    or os.environ.get("https_proxy")
-    or os.environ.get("HTTP_PROXY")
-    or os.environ.get("http_proxy")
-)
-print(f"STARTUP CHECK: proxy env={_proxy!r}", file=sys.stderr, flush=True)
+
+# ── Connectivity check (aiohttp from within the persistent loop) ───────────────
+async def _check_aiohttp():
+    import aiohttp
+
+    url = f"https://api.telegram.org/bot{_bot.token}/getMe"
+    timeout = aiohttp.ClientTimeout(total=10)
+    async with aiohttp.ClientSession(timeout=timeout) as sess:
+        async with sess.get(url) as resp:
+            data = await resp.json()
+            return data.get("ok"), data.get("result", {}).get("username")
+
+
 try:
-    urllib.request.urlopen("https://api.telegram.org", timeout=5)
-    print("STARTUP CHECK: HTTP to api.telegram.org OK", file=sys.stderr, flush=True)
+    ok, username = _run(_check_aiohttp(), timeout=15)
+    logger.error("STARTUP aiohttp check: ok=%s bot=@%s", ok, username)
 except Exception as _e:
-    print(f"STARTUP CHECK: HTTP to api.telegram.org FAILED: {_e}", file=sys.stderr, flush=True)
+    logger.error("STARTUP aiohttp check FAILED: %s", _e)
 
 
 # ── HTML templates ─────────────────────────────────────────────────────────────
@@ -116,9 +119,9 @@ def application(environ, start_response):  # type: ignore[no-untyped-def]
             try:
                 from aiogram.types import Update
 
-                logger.info("Parsing update...")
+                proxy_vars = {k: v for k, v in os.environ.items() if "proxy" in k.lower()}
+                logger.error("PROXY ENV: %s", proxy_vars)
                 update = Update.model_validate(json.loads(body))
-                logger.info("Feeding update %s to dispatcher...", update.update_id)
                 _run(_dp.feed_update(_bot, update))
                 logger.info("Update %s processed OK", update.update_id)
             except Exception:
