@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     webhook_url: str = ""  # e.g. https://gigs-bot.onrender.com
     webhook_secret: str = ""  # random secret to validate Telegram requests
 
+    # Optional HTTP/HTTPS proxy for outbound requests (e.g. PythonAnywhere: http://proxy.server:3128)
+    proxy_url: str = ""
+
     # FastAPI
     api_host: str = "0.0.0.0"
     api_port: int = 8000

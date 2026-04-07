@@ -1,6 +1,9 @@
 """Bot and Dispatcher factory."""
 
+import os
+
 from aiogram import Bot, Dispatcher
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.handlers import button_mode, common, text_mode
@@ -11,6 +14,18 @@ from app.core.config import settings
 def create_bot() -> Bot:
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
+    # PythonAnywhere (and some other hosts) route outbound traffic through a
+    # proxy. aiohttp does NOT pick up system proxy env vars automatically, so
+    # we pass it explicitly when available.
+    proxy = (
+        settings.proxy_url
+        or os.environ.get("HTTPS_PROXY")
+        or os.environ.get("https_proxy")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("http_proxy")
+    )
+    if proxy:
+        return Bot(token=settings.telegram_bot_token, session=AiohttpSession(proxy=proxy))
     return Bot(token=settings.telegram_bot_token)
 
 
