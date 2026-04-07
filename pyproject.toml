@@ -9,7 +9,6 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     "sqlalchemy[asyncio]>=2.0.0",
     "aiosqlite>=0.20.0",
-    "a2wsgi>=1.10.0",
     "pydantic-settings>=2.0.0",
     "google-auth>=2.25.0",
     "google-auth-oauthlib>=1.2.0",

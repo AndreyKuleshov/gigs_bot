@@ -1,27 +1,148 @@
-"""PythonAnywhere WSGI entry point.
+"""PythonAnywhere WSGI entry point — no ASGI bridge needed.
 
-In the PythonAnywhere web app config, set the WSGI file to this file and
-the working directory to the project root.
+Handles the four routes the bot uses:
+  GET  /health
+  POST /webhook/telegram
+  GET  /auth/google
+  GET  /auth/google/callback
 
-Environment variables to set in the PythonAnywhere web app:
-  TELEGRAM_BOT_TOKEN, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
-  GOOGLE_REDIRECT_URI, OPENAI_API_KEY, FERNET_KEY, WEBHOOK_URL, WEBHOOK_SECRET
+The webhook handler returns 200 immediately and processes the Telegram
+update in a daemon thread so uWSGI is never blocked by bot I/O.
 """
 
 import asyncio
+import json
+import logging
+import threading
+from urllib.parse import parse_qs
 
-from a2wsgi import ASGIMiddleware
-
-from app.api.app import create_app
 from app.bot.setup import create_bot, create_dispatcher
+from app.core.config import settings
 from app.db.base import create_tables
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # ── Eager initialisation ───────────────────────────────────────────────────────
-# Run all async startup (DB table creation) at import time so the first
-# WSGI request is not burdened with a 60-second lifespan cold-start.
 asyncio.run(create_tables())
 _bot = create_bot()
 _dp = create_dispatcher()
 
-# ── Application ────────────────────────────────────────────────────────────────
-application = ASGIMiddleware(create_app(preloaded_bot=_bot, preloaded_dp=_dp))  # type: ignore[arg-type]
+
+def _run(coro):  # type: ignore[no-untyped-def]
+    """Run an async coroutine in a fresh event loop (safe from any thread)."""
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+# ── HTML templates ─────────────────────────────────────────────────────────────
+_SUCCESS_HTML = b"""<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Authorised</title></head>
+<body style="font-family:sans-serif;text-align:center;padding-top:4rem">
+  <h1>&#x2705; Google Calendar connected!</h1>
+  <p>You can close this tab and return to the Telegram bot.</p>
+  <script>setTimeout(() => window.close(), 3000);</script>
+</body>
+</html>"""
+
+_ERROR_HTML = """<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Error</title></head>
+<body style="font-family:sans-serif;text-align:center;padding-top:4rem">
+  <h1>&#x274C; Authorisation failed</h1>
+  <p>{reason}</p>
+</body>
+</html>"""
+
+
+# ── WSGI application ───────────────────────────────────────────────────────────
+def application(environ, start_response):  # type: ignore[no-untyped-def]
+    path = environ.get("PATH_INFO", "/")
+    method = environ.get("REQUEST_METHOD", "GET")
+    params = parse_qs(environ.get("QUERY_STRING", ""))
+
+    def respond(status, body, content_type="application/json"):
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        start_response(
+            status,
+            [("Content-Type", content_type), ("Content-Length", str(len(body)))],
+        )
+        return [body]
+
+    def redirect(url):
+        start_response("302 Found", [("Location", url)])
+        return [b""]
+
+    # ── Health ─────────────────────────────────────────────────────────────────
+    if path == "/health":
+        return respond("200 OK", b'{"status":"ok"}')
+
+    # ── Telegram webhook ───────────────────────────────────────────────────────
+    if method == "POST" and path == "/webhook/telegram":
+        secret = environ.get("HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN", "")
+        if settings.webhook_secret and secret != settings.webhook_secret:
+            return respond("403 Forbidden", b'{"error":"forbidden"}')
+
+        body_size = int(environ.get("CONTENT_LENGTH", 0) or 0)
+        body = environ["wsgi.input"].read(body_size)
+
+        def process():
+            try:
+                from aiogram.types import Update
+
+                update = Update.model_validate(json.loads(body))
+                _run(_dp.feed_update(_bot, update))
+            except Exception as exc:
+                logger.error("Webhook processing error: %s", exc)
+
+        threading.Thread(target=process, daemon=True).start()
+        return respond("200 OK", b'{"ok":true}')
+
+    # ── Google OAuth start ─────────────────────────────────────────────────────
+    if method == "GET" and path == "/auth/google":
+        try:
+            user_id = int(params.get("telegram_user_id", [None])[0])  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return respond("400 Bad Request", b'{"error":"missing telegram_user_id"}')
+        try:
+            from app.services.auth_service import auth_service
+
+            auth_url = _run(auth_service.get_auth_url(user_id))
+            return redirect(auth_url)
+        except Exception as exc:
+            logger.error("Auth start error: %s", exc)
+            return respond("500 Internal Server Error", b'{"error":"internal error"}')
+
+    # ── Google OAuth callback ──────────────────────────────────────────────────
+    if method == "GET" and path == "/auth/google/callback":
+        error = params.get("error", [None])[0]
+        code = params.get("code", [None])[0]
+        state = params.get("state", [None])[0]
+
+        if error:
+            html = _ERROR_HTML.format(reason=error).encode()
+            return respond("400 Bad Request", html, "text/html; charset=utf-8")
+
+        if not code or not state:
+            html = _ERROR_HTML.format(reason="Missing code or state").encode()
+            return respond("400 Bad Request", html, "text/html; charset=utf-8")
+
+        try:
+            from app.services.auth_service import auth_service
+
+            _run(auth_service.handle_oauth_callback(code=code, state=state))
+            return respond("200 OK", _SUCCESS_HTML, "text/html; charset=utf-8")
+        except ValueError as exc:
+            html = _ERROR_HTML.format(reason=str(exc)).encode()
+            return respond("400 Bad Request", html, "text/html; charset=utf-8")
+        except Exception as exc:
+            logger.error("OAuth callback error: %s", exc)
+            html = _ERROR_HTML.format(reason="Internal error").encode()
+            return respond("500 Internal Server Error", html, "text/html; charset=utf-8")
+
+    return respond("404 Not Found", b'{"error":"not found"}')
