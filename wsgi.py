@@ -13,6 +13,7 @@ update in a daemon thread so uWSGI is never blocked by bot I/O.
 import asyncio
 import json
 import logging
+import socket as _socket
 import threading
 from urllib.parse import parse_qs
 
@@ -40,6 +41,14 @@ def _run(coro, timeout: int = 60):  # type: ignore[no-untyped-def]
 _run(create_tables())
 _bot = create_bot()
 _dp = create_dispatcher()
+
+# ── Connectivity check ─────────────────────────────────────────────────────────
+try:
+    _s = _socket.create_connection(("api.telegram.org", 443), timeout=5)
+    _s.close()
+    logger.error("STARTUP CHECK: api.telegram.org is REACHABLE from web worker")
+except Exception as _e:
+    logger.error("STARTUP CHECK: api.telegram.org is NOT REACHABLE: %s", _e)
 
 
 # ── HTML templates ─────────────────────────────────────────────────────────────
