@@ -1,22 +1,69 @@
 """Bot and Dispatcher factory."""
 
 import os
+from typing import Any, cast
 
+import aiohttp
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.handlers import button_mode, common, text_mode
 from app.bot.middlewares.db_session import DbSessionMiddleware
 from app.core.config import settings
 
+# Sensible default: 30s total, 10s to establish connection.
+# Without an explicit timeout the aiohttp session can hang indefinitely.
+_BOT_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10)
+
+
+class _NativeProxySession(AiohttpSession):
+    """AiohttpSession that passes proxy= at the request level.
+
+    aiohttp_socks.ProxyConnector (the approach used by AiohttpSession's
+    built-in proxy= support) can block the asyncio event loop on some
+    platforms (e.g. PythonAnywhere uWSGI).  Using aiohttp's native
+    per-request proxy= avoids the ProxyConnector entirely.
+    """
+
+    def __init__(self, proxy_url: str, **kwargs: Any) -> None:
+        super().__init__(**kwargs)  # no proxy= → no ProxyConnector created
+        self._native_proxy = proxy_url
+
+    async def make_request(  # type: ignore[override]
+        self,
+        bot: Bot,
+        method: Any,
+        timeout: Any = None,
+    ) -> Any:
+        session = await self.create_session()
+        url = self.api.api_url(token=bot.token, method=method.__api_method__)
+        form = self.build_form_data(bot=bot, method=method)
+        effective_timeout = _BOT_TIMEOUT if timeout is None else timeout
+        try:
+            async with session.post(
+                url,
+                data=form,
+                timeout=effective_timeout,
+                proxy=self._native_proxy,
+            ) as resp:
+                raw_result = await resp.text()
+        except TimeoutError as exc:
+            raise TelegramNetworkError(method=method, message="Request timeout error") from exc
+        except aiohttp.ClientError as exc:
+            raise TelegramNetworkError(
+                method=method, message=f"{type(exc).__name__}: {exc}"
+            ) from exc
+        response = self.check_response(
+            bot=bot, method=method, status_code=resp.status, content=raw_result
+        )
+        return cast(Any, response.result)
+
 
 def create_bot() -> Bot:
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
-    # PythonAnywhere (and some other hosts) route outbound traffic through a
-    # proxy. aiohttp does NOT pick up system proxy env vars automatically, so
-    # we pass it explicitly when available.
     proxy = (
         settings.proxy_url
         or os.environ.get("HTTPS_PROXY")
@@ -25,8 +72,11 @@ def create_bot() -> Bot:
         or os.environ.get("http_proxy")
     )
     if proxy:
-        return Bot(token=settings.telegram_bot_token, session=AiohttpSession(proxy=proxy))
-    return Bot(token=settings.telegram_bot_token)
+        # Use native proxy session to avoid aiohttp_socks blocking the loop.
+        session: AiohttpSession = _NativeProxySession(proxy_url=proxy)
+    else:
+        session = AiohttpSession()
+    return Bot(token=settings.telegram_bot_token, session=session)
 
 
 def create_dispatcher() -> Dispatcher:
