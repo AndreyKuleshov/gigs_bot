@@ -99,8 +99,11 @@ def application(environ, start_response):  # type: ignore[no-untyped-def]
             try:
                 from aiogram.types import Update
 
+                logger.info("Parsing update...")
                 update = Update.model_validate(json.loads(body))
+                logger.info("Feeding update %s to dispatcher...", update.update_id)
                 _run(_dp.feed_update(_bot, update))
+                logger.info("Update %s processed OK", update.update_id)
             except Exception:
                 logger.exception("Webhook processing error")
 
