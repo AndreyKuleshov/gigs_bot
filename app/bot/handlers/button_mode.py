@@ -1,6 +1,5 @@
 """Button mode: FSM-driven calendar CRUD via inline keyboards."""
 
-import logging
 from datetime import UTC, datetime
 
 from aiogram import F, Router
@@ -18,8 +17,6 @@ from app.bot.keyboards import (
 from app.bot.states import CreateEventFSM, DeleteEventFSM, SelectCalendarFSM, UpdateEventFSM
 from app.services.auth_service import auth_service
 from app.services.calendar_service import EventCreate, EventUpdate, calendar_service
-
-logger = logging.getLogger(__name__)
 
 router = Router(name="button_mode")
 
