@@ -4,30 +4,27 @@ Flow:
   1. Bot sends user to :meth:`AuthService.get_auth_url`.
   2. User authorises in browser and is redirected to FastAPI callback.
   3. FastAPI calls :meth:`AuthService.handle_oauth_callback`.
-  4. Encrypted tokens are stored in PostgreSQL.
+  4. Encrypted tokens are stored in PostgreSQL / SQLite.
   5. Bot retrieves credentials via :meth:`AuthService.get_credentials`.
 """
 
 import asyncio
-import json
 import logging
 import secrets
+from datetime import UTC, datetime, timedelta
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
-from app.cache.redis_client import get_redis
 from app.core.config import settings
 from app.core.security import decrypt_json, encrypt_json
 from app.db.base import get_session
-from app.db.models import User
+from app.db.models import OAuthState, User
 
 logger = logging.getLogger(__name__)
 
-_STATE_PREFIX = "oauth_state:"
 _STATE_TTL_SECONDS = 600  # 10 minutes
-_CAL_PREFIX = "user_cal:"
 
 
 def _build_flow() -> Flow:
@@ -47,7 +44,7 @@ class AuthService:
     # ──────────────────────────── OAuth flow ──────────────────────────────────
 
     async def get_auth_url(self, telegram_user_id: int) -> str:
-        """Store a random state in Redis and return the Google authorisation URL."""
+        """Store a random state in the DB and return the Google authorisation URL."""
         state = secrets.token_urlsafe(32)
         flow = _build_flow()
         flow.redirect_uri = settings.google_redirect_uri
@@ -57,14 +54,21 @@ class AuthService:
             include_granted_scopes="true",
             prompt="consent",
         )
-        # Persist both the user_id and the PKCE code_verifier that the Flow
-        # embedded in the auth URL as code_challenge. Without it the token
-        # exchange will fail with "Missing code verifier".
-        state_data = json.dumps(
-            {"user_id": telegram_user_id, "code_verifier": flow.code_verifier or ""}
-        )
-        redis = get_redis()
-        await redis.setex(f"{_STATE_PREFIX}{state}", _STATE_TTL_SECONDS, state_data)
+        # Persist the PKCE code_verifier alongside the state so the callback
+        # can complete the token exchange without a separate Redis store.
+        async with get_session() as session:
+            # Clean up any expired states first
+            await session.execute(
+                delete(OAuthState).where(OAuthState.expires_at < datetime.now(UTC))
+            )
+            session.add(
+                OAuthState(
+                    state=state,
+                    telegram_user_id=telegram_user_id,
+                    code_verifier=flow.code_verifier or "",
+                    expires_at=datetime.now(UTC) + timedelta(seconds=_STATE_TTL_SECONDS),
+                )
+            )
         return auth_url
 
     async def handle_oauth_callback(self, code: str, state: str) -> int:
@@ -73,19 +77,18 @@ class AuthService:
         Returns the Telegram user_id associated with *state*.
         Raises :class:`ValueError` if the state is unknown or expired.
         """
-        redis = get_redis()
-        raw = await redis.get(f"{_STATE_PREFIX}{state}")
-        if raw is None:
-            raise ValueError("OAuth state is expired or invalid")
-        parsed = json.loads(raw)
-        telegram_user_id = int(parsed["user_id"])
-        code_verifier: str | None = parsed.get("code_verifier") or None
-        await redis.delete(f"{_STATE_PREFIX}{state}")
+        async with get_session() as session:
+            oauth_state = await session.get(OAuthState, state)
+            if oauth_state is None or oauth_state.expires_at < datetime.now(UTC):
+                if oauth_state is not None:
+                    await session.delete(oauth_state)
+                raise ValueError("OAuth state is expired or invalid")
+            telegram_user_id = oauth_state.telegram_user_id
+            code_verifier: str | None = oauth_state.code_verifier or None
+            await session.delete(oauth_state)
 
         flow = _build_flow()
         flow.redirect_uri = settings.google_redirect_uri
-        # fetch_token is a synchronous HTTP call – offload to thread pool.
-        # Pass code_verifier so Google can validate the PKCE challenge.
         await asyncio.to_thread(flow.fetch_token, code=code, code_verifier=code_verifier)
         creds = flow.credentials
 
@@ -144,6 +147,24 @@ class AuthService:
             if user is not None:
                 user.google_tokens_encrypted = None
 
+    # ──────────────────────────── Calendar selection ──────────────────────────
+
+    async def get_calendar_id(self, telegram_user_id: int) -> str:
+        """Return the calendar ID selected by this user, defaulting to 'primary'."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(User.selected_calendar_id).where(User.id == telegram_user_id)
+            )
+            row = result.scalar_one_or_none()
+        return row if row else "primary"
+
+    async def set_calendar_id(self, telegram_user_id: int, calendar_id: str) -> None:
+        """Persist the selected calendar ID for this user."""
+        async with get_session() as session:
+            user = await session.get(User, telegram_user_id)
+            if user is not None:
+                user.selected_calendar_id = calendar_id
+
     # ──────────────────────────── User helpers ────────────────────────────────
 
     async def get_or_create_user(
@@ -168,17 +189,6 @@ class AuthService:
             result = await session.execute(select(User.mode).where(User.id == telegram_user_id))
             row = result.scalar_one_or_none()
         return row if row is not None else "button"
-
-    async def get_calendar_id(self, telegram_user_id: int) -> str:
-        """Return the calendar ID selected by this user, defaulting to 'primary'."""
-        redis = get_redis()
-        val = await redis.get(f"{_CAL_PREFIX}{telegram_user_id}")
-        return val if val else "primary"
-
-    async def set_calendar_id(self, telegram_user_id: int, calendar_id: str) -> None:
-        """Persist the selected calendar ID for this user."""
-        redis = get_redis()
-        await redis.set(f"{_CAL_PREFIX}{telegram_user_id}", calendar_id)
 
     async def set_user_mode(self, telegram_user_id: int, mode: str) -> None:
         async with get_session() as session:

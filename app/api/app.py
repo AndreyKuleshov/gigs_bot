@@ -11,7 +11,6 @@ from app.core.config import settings
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.bot.setup import create_bot, create_dispatcher
-    from app.cache.redis_client import close_redis
     from app.db.base import close_engine, create_tables
 
     await create_tables()
@@ -45,7 +44,6 @@ async def lifespan(app: FastAPI):
 
     await bot.session.close()
     await close_engine()
-    await close_redis()
 
 
 def create_app() -> FastAPI:

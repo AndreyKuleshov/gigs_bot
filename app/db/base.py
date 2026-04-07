@@ -9,22 +9,31 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 
-# asyncpg doesn't accept `sslmode` as a query param — strip it and pass ssl via
-# connect_args instead so Neon (and any other SSL-required host) works correctly.
 _db_url = settings.database_url.replace("?sslmode=require", "").replace("&sslmode=require", "")
 _ssl_required = "sslmode=require" in settings.database_url
+_is_sqlite = _db_url.startswith("sqlite")
 
-engine = create_async_engine(
-    _db_url,
-    echo=settings.debug,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
-    connect_args={"ssl": True} if _ssl_required else {},
-)
+if _is_sqlite:
+    # SQLite requires StaticPool for async use and check_same_thread=False
+    engine = create_async_engine(
+        _db_url,
+        echo=settings.debug,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+else:
+    engine = create_async_engine(
+        _db_url,
+        echo=settings.debug,
+        pool_pre_ping=True,
+        pool_size=10,
+        max_overflow=20,
+        connect_args={"ssl": True} if _ssl_required else {},
+    )
 
 async_session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
     engine,
@@ -52,8 +61,6 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 async def create_tables() -> None:
     """Create all tables that are not yet present in the database."""
-    # Side-effect: registers ORM models with Base.metadata before create_all.
-    # importlib.import_module avoids a "not accessed" diagnostic on an unused import.
     import importlib
 
     importlib.import_module("app.db.models")

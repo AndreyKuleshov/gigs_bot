@@ -26,6 +26,11 @@ class User(Base):
     # "button" or "text"
     mode: Mapped[str] = mapped_column(String(20), default="button", nullable=False)
 
+    # Selected Google Calendar ID (defaults to primary calendar)
+    selected_calendar_id: Mapped[str] = mapped_column(
+        String(255), default="primary", nullable=False
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -38,3 +43,14 @@ class User(Base):
 
     def __repr__(self) -> str:
         return f"<User id={self.id} mode={self.mode}>"
+
+
+class OAuthState(Base):
+    """Short-lived PKCE OAuth state stored in DB (replaces Redis for stateless deploys)."""
+
+    __tablename__ = "oauth_states"
+
+    state: Mapped[str] = mapped_column(String(64), primary_key=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    code_verifier: Mapped[str] = mapped_column(String(256), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

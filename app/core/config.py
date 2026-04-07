@@ -19,11 +19,8 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
 
-    # PostgreSQL  (asyncpg driver)
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5433/gigs_bot"
-
-    # Redis
-    redis_url: str = "redis://localhost:6379/0"
+    # Database — SQLite by default (PythonAnywhere), set to PostgreSQL for Fly.io / Docker
+    database_url: str = "sqlite+aiosqlite:///./gigs_bot.db"
 
     # Fernet symmetric key for encrypting Google tokens at rest.
     # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # noqa: E501

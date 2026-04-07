@@ -1,11 +1,10 @@
 """Bot and Dispatcher factory."""
 
 from aiogram import Bot, Dispatcher
-from aiogram.fsm.storage.redis import RedisStorage
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.handlers import button_mode, common, text_mode
 from app.bot.middlewares.db_session import DbSessionMiddleware
-from app.cache.redis_client import get_raw_redis
 from app.core.config import settings
 
 
@@ -16,8 +15,7 @@ def create_bot() -> Bot:
 
 
 def create_dispatcher() -> Dispatcher:
-    storage = RedisStorage(redis=get_raw_redis())
-    dp = Dispatcher(storage=storage)
+    dp = Dispatcher(storage=MemoryStorage())
 
     # Middleware – injects AsyncSession into each update's data dict
     dp.update.middleware(DbSessionMiddleware())
