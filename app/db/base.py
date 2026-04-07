@@ -12,12 +12,18 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import settings
 
+# asyncpg doesn't accept `sslmode` as a query param — strip it and pass ssl via
+# connect_args instead so Neon (and any other SSL-required host) works correctly.
+_db_url = settings.database_url.replace("?sslmode=require", "").replace("&sslmode=require", "")
+_ssl_required = "sslmode=require" in settings.database_url
+
 engine = create_async_engine(
-    settings.database_url,
+    _db_url,
     echo=settings.debug,
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
+    connect_args={"ssl": True} if _ssl_required else {},
 )
 
 async_session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(

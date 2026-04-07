@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # noqa: E501
     fernet_key: str = ""
 
+    # Webhook (set to your public URL on Render, leave empty for local long-polling)
+    webhook_url: str = ""  # e.g. https://gigs-bot.onrender.com
+    webhook_secret: str = ""  # random secret to validate Telegram requests
+
     # FastAPI
     api_host: str = "0.0.0.0"
     api_port: int = 8000
