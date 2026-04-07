@@ -43,23 +43,41 @@ _bot = create_bot()
 _dp = create_dispatcher()
 
 
-# ── Connectivity check (aiohttp from within the persistent loop) ───────────────
-async def _check_aiohttp():
+# ── Connectivity check (bot getMe from within the persistent loop) ────────────
+async def _check_bot() -> dict:
     import aiohttp
 
+    results: dict = {}
+
+    # 1. Raw aiohttp without proxy
     url = f"https://api.telegram.org/bot{_bot.token}/getMe"
-    timeout = aiohttp.ClientTimeout(total=10)
-    async with aiohttp.ClientSession(timeout=timeout) as sess:
-        async with sess.get(url) as resp:
-            data = await resp.json()
-            return data.get("ok"), data.get("result", {}).get("username")
+    try:
+        timeout = aiohttp.ClientTimeout(total=8)
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.get(url) as resp:
+                results["direct"] = f"HTTP {resp.status}"
+    except Exception as exc:
+        results["direct"] = f"FAIL {type(exc).__name__}: {exc}"
 
+    # 2. Raw aiohttp through proxy
+    proxy_url = os.environ.get("https_proxy") or os.environ.get("http_proxy")
+    if proxy_url:
+        try:
+            timeout = aiohttp.ClientTimeout(total=8)
+            async with aiohttp.ClientSession(timeout=timeout) as sess:
+                async with sess.get(url, proxy=proxy_url) as resp:
+                    results["proxy_raw"] = f"HTTP {resp.status}"
+        except Exception as exc:
+            results["proxy_raw"] = f"FAIL {type(exc).__name__}: {exc}"
 
-try:
-    ok, username = _run(_check_aiohttp(), timeout=15)
-    logger.error("STARTUP aiohttp check: ok=%s bot=@%s", ok, username)
-except Exception as _e:
-    logger.error("STARTUP aiohttp check FAILED: %s", _e)
+    # 3. Bot session (aiogram, uses AiohttpSession with proxy if configured)
+    try:
+        me = await _bot.get_me()
+        results["bot"] = f"ok bot=@{me.username}"
+    except Exception as exc:
+        results["bot"] = f"FAIL {type(exc).__name__}: {exc}"
+
+    return results
 
 
 # ── HTML templates ─────────────────────────────────────────────────────────────
@@ -106,14 +124,13 @@ def application(environ, start_response):  # type: ignore[no-untyped-def]
     if path == "/health":
         return respond("200 OK", b'{"status":"ok"}')
 
-    # ── Debug: aiohttp connectivity test ───────────────────────────────────────
+    # ── Debug: connectivity test ───────────────────────────────────────────────
     if path == "/debug/aiohttp":
         import json as _json
 
         try:
-            ok, username = _run(_check_aiohttp(), timeout=15)
-            body_str = _json.dumps({"ok": ok, "bot": username})
-            return respond("200 OK", body_str.encode())
+            results = _run(_check_bot(), timeout=30)
+            return respond("200 OK", _json.dumps(results).encode())
         except Exception as exc:
             body_str = _json.dumps({"error": str(exc), "type": type(exc).__name__})
             return respond("500 Internal Server Error", body_str.encode())
