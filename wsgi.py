@@ -8,11 +8,20 @@ Environment variables to set in the PythonAnywhere web app:
   GOOGLE_REDIRECT_URI, OPENAI_API_KEY, FERNET_KEY, WEBHOOK_URL, WEBHOOK_SECRET
 """
 
+import asyncio
+
 from a2wsgi import ASGIMiddleware
 
 from app.api.app import create_app
+from app.bot.setup import create_bot, create_dispatcher
+from app.db.base import create_tables
 
-# PythonAnywhere uses WSGI — wrap the ASGI FastAPI app.
-# type: ignore comment suppresses the minor ASGI Scope type mismatch between
-# starlette and a2wsgi — both are structurally compatible at runtime.
-application = ASGIMiddleware(create_app())  # type: ignore[arg-type]
+# ── Eager initialisation ───────────────────────────────────────────────────────
+# Run all async startup (DB table creation) at import time so the first
+# WSGI request is not burdened with a 60-second lifespan cold-start.
+asyncio.run(create_tables())
+_bot = create_bot()
+_dp = create_dispatcher()
+
+# ── Application ────────────────────────────────────────────────────────────────
+application = ASGIMiddleware(create_app(preloaded_bot=_bot, preloaded_dp=_dp))  # type: ignore[arg-type]
