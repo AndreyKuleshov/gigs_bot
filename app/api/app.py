@@ -21,11 +21,10 @@ async def lifespan(app: FastAPI):
     app.state.dp = dp
 
     if settings.webhook_url:
-        await bot.set_webhook(
-            url=f"{settings.webhook_url}/webhook/telegram",
-            secret_token=settings.webhook_secret or None,
-            drop_pending_updates=True,
-        )
+        # Webhook is registered externally (e.g. via curl / CLI).
+        # We skip set_webhook here to avoid a blocking outbound call during
+        # WSGI startup (PythonAnywhere free tier times out on cold start).
+        pass
     else:
         # Local dev: long-polling in background
         import asyncio
@@ -37,9 +36,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    if settings.webhook_url:
-        await bot.delete_webhook()
-    else:
+    if not settings.webhook_url:
         app.state.polling_task.cancel()
 
     await bot.session.close()
