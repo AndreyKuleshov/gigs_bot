@@ -106,6 +106,18 @@ def application(environ, start_response):  # type: ignore[no-untyped-def]
     if path == "/health":
         return respond("200 OK", b'{"status":"ok"}')
 
+    # ── Debug: aiohttp connectivity test ───────────────────────────────────────
+    if path == "/debug/aiohttp":
+        import json as _json
+
+        try:
+            ok, username = _run(_check_aiohttp(), timeout=15)
+            body_str = _json.dumps({"ok": ok, "bot": username})
+            return respond("200 OK", body_str.encode())
+        except Exception as exc:
+            body_str = _json.dumps({"error": str(exc), "type": type(exc).__name__})
+            return respond("500 Internal Server Error", body_str.encode())
+
     # ── Telegram webhook ───────────────────────────────────────────────────────
     if method == "POST" and path == "/webhook/telegram":
         secret = environ.get("HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN", "")
