@@ -8,13 +8,13 @@ avoid httplib2 thread-safety issues.
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -56,18 +56,16 @@ class CalendarRead(BaseModel):
 
 class EventCreate(BaseModel):
     summary: str
-    start: datetime
-    end: datetime
+    start: datetime | None = None
+    end: datetime | None = None
+    start_date: date | None = None
+    end_date: date | None = None
     description: str | None = None
     location: str | None = None
 
-    @field_validator("end")
-    @classmethod
-    def end_after_start(cls, v: datetime, info) -> datetime:
-        start = info.data.get("start")
-        if start and v <= start:
-            raise ValueError("end must be after start")
-        return v
+    @property
+    def all_day(self) -> bool:
+        return self.start_date is not None
 
 
 class EventUpdate(BaseModel):
@@ -75,6 +73,8 @@ class EventUpdate(BaseModel):
     summary: str | None = None
     start: datetime | None = None
     end: datetime | None = None
+    start_date: date | None = None
+    end_date: date | None = None
     description: str | None = None
     location: str | None = None
 
@@ -220,11 +220,18 @@ class CalendarService:
     ) -> EventRead:
         def _call() -> dict:
             svc = _make_service(credentials)
-            body: dict = {
-                "summary": event.summary,
-                "start": {"dateTime": event.start.isoformat()},
-                "end": {"dateTime": event.end.isoformat()},
-            }
+            if event.all_day:
+                body: dict = {
+                    "summary": event.summary,
+                    "start": {"date": event.start_date.isoformat()},  # type: ignore[union-attr]
+                    "end": {"date": event.end_date.isoformat()},  # type: ignore[union-attr]
+                }
+            else:
+                body = {
+                    "summary": event.summary,
+                    "start": {"dateTime": event.start.isoformat()},  # type: ignore[union-attr]
+                    "end": {"dateTime": event.end.isoformat()},  # type: ignore[union-attr]
+                }
             if event.description:
                 body["description"] = event.description
             if event.location:
@@ -253,9 +260,13 @@ class CalendarService:
             )
             if event.summary is not None:
                 existing["summary"] = event.summary
-            if event.start is not None:
+            if event.start_date is not None:
+                existing["start"] = {"date": event.start_date.isoformat()}
+            elif event.start is not None:
                 existing["start"] = {"dateTime": event.start.isoformat()}
-            if event.end is not None:
+            if event.end_date is not None:
+                existing["end"] = {"date": event.end_date.isoformat()}
+            elif event.end is not None:
                 existing["end"] = {"dateTime": event.end.isoformat()}
             if event.description is not None:
                 existing["description"] = event.description

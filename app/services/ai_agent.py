@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from openai import AsyncOpenAI
@@ -104,18 +104,37 @@ _TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "create_event",
-            "description": "Create a new calendar event.",
+            "description": (
+                "Create a new calendar event. "
+                "For all-day or multi-day events use start_date/end_date (YYYY-MM-DD). "
+                "For timed events use start_time/end_time (ISO 8601). "
+                "Do not mix date and datetime fields."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "summary": {"type": "string", "description": "Event title."},
                     "start_time": {
                         "type": "string",
-                        "description": "Start datetime ISO 8601 (e.g. 2025-06-01T14:00:00+03:00).",
+                        "description": (
+                            "Start datetime ISO 8601 "
+                            "(e.g. 2025-06-01T14:00:00+03:00). For timed events."
+                        ),
                     },
                     "end_time": {
                         "type": "string",
-                        "description": "End datetime ISO 8601.",
+                        "description": "End datetime ISO 8601. For timed events.",
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "description": "Start date YYYY-MM-DD. For all-day/multi-day events.",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": (
+                            "End date YYYY-MM-DD (exclusive — day AFTER the last day). "
+                            "For all-day/multi-day events."
+                        ),
                     },
                     "description": {
                         "type": "string",
@@ -123,7 +142,7 @@ _TOOLS: list[dict] = [
                     },
                     "location": {"type": "string", "description": "Optional location."},
                 },
-                "required": ["summary", "start_time", "end_time"],
+                "required": ["summary"],
             },
         },
     },
@@ -133,7 +152,8 @@ _TOOLS: list[dict] = [
             "name": "update_event",
             "description": (
                 "Update an existing calendar event. "
-                "Requires event_id — obtain it from read_events first."
+                "Requires event_id — obtain it from read_events first. "
+                "Use start_date/end_date for all-day events, start_time/end_time for timed."
             ),
             "parameters": {
                 "type": "object",
@@ -145,6 +165,14 @@ _TOOLS: list[dict] = [
                     "summary": {"type": "string", "description": "New title."},
                     "start_time": {"type": "string", "description": "New start ISO 8601."},
                     "end_time": {"type": "string", "description": "New end ISO 8601."},
+                    "start_date": {
+                        "type": "string",
+                        "description": "New start date YYYY-MM-DD (all-day).",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "New end date YYYY-MM-DD exclusive (all-day).",
+                    },
                     "description": {"type": "string", "description": "New description."},
                     "location": {"type": "string", "description": "New location."},
                 },
@@ -313,8 +341,20 @@ class AIAgent:
             if name == "create_event":
                 ev = EventCreate(
                     summary=args["summary"],
-                    start=datetime.fromisoformat(args["start_time"]),
-                    end=datetime.fromisoformat(args["end_time"]),
+                    start=(
+                        datetime.fromisoformat(args["start_time"])
+                        if args.get("start_time")
+                        else None
+                    ),
+                    end=(
+                        datetime.fromisoformat(args["end_time"]) if args.get("end_time") else None
+                    ),
+                    start_date=(
+                        date.fromisoformat(args["start_date"]) if args.get("start_date") else None
+                    ),
+                    end_date=(
+                        date.fromisoformat(args["end_date"]) if args.get("end_date") else None
+                    ),
                     description=args.get("description"),
                     location=args.get("location"),
                 )
@@ -334,6 +374,12 @@ class AIAgent:
                     ),
                     end=(
                         datetime.fromisoformat(args["end_time"]) if args.get("end_time") else None
+                    ),
+                    start_date=(
+                        date.fromisoformat(args["start_date"]) if args.get("start_date") else None
+                    ),
+                    end_date=(
+                        date.fromisoformat(args["end_date"]) if args.get("end_date") else None
                     ),
                     description=args.get("description"),
                     location=args.get("location"),
