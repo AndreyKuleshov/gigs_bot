@@ -8,20 +8,13 @@ avoid httplib2 thread-safety issues.
 
 import asyncio
 import logging
-import os
 from datetime import UTC, datetime
-from urllib.parse import urlparse
 
-import google_auth_httplib2
-import httplib2
-import requests as req_lib
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from pydantic import BaseModel, field_validator
-
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -99,44 +92,23 @@ class EventRead(BaseModel):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _get_proxy_url() -> str:
-    """Return the configured proxy URL, or empty string."""
-    return (
-        settings.proxy_url
-        or os.environ.get("HTTPS_PROXY")
-        or os.environ.get("https_proxy")
-        or os.environ.get("HTTP_PROXY")
-        or os.environ.get("http_proxy")
-        or ""
-    )
-
-
 def _refresh_credentials(credentials: Credentials) -> Credentials:
-    """Refresh token if expired.  Must run inside a thread (synchronous I/O)."""
-    if credentials.expired and credentials.refresh_token:
-        proxy_url = _get_proxy_url()
-        session = req_lib.Session()
-        if proxy_url:
-            session.proxies = {"https": proxy_url, "http": proxy_url}
-        credentials.refresh(Request(session))
+    """Ensure token is fresh before the API call.
+
+    The Credentials object reconstructed from the DB has ``expiry=None``
+    so ``.expired`` returns False — yet the token may be long expired.
+    We force a refresh whenever expiry is unknown to avoid a 401 that
+    triggers httplib2-based refresh (which can fail on restricted networks).
+    """
+    if credentials.refresh_token and (credentials.expired or credentials.expiry is None):
+        credentials.refresh(Request())
     return credentials
 
 
 def _make_service(credentials: Credentials):
     """Return a fresh Calendar v3 resource.  Always call from a thread."""
     credentials = _refresh_credentials(credentials)
-    proxy_url = _get_proxy_url()
-    proxy_info = None
-    if proxy_url:
-        parsed = urlparse(proxy_url)
-        proxy_info = httplib2.ProxyInfo(
-            proxy_type=3,  # PROXY_TYPE_HTTP
-            proxy_host=parsed.hostname,
-            proxy_port=parsed.port or 3128,
-        )
-    http = httplib2.Http(proxy_info=proxy_info)
-    authed_http = google_auth_httplib2.AuthorizedHttp(credentials, http=http)
-    return build("calendar", "v3", http=authed_http, cache_discovery=False)
+    return build("calendar", "v3", credentials=credentials, cache_discovery=False)
 
 
 def _parse_dt(raw: str) -> datetime:
