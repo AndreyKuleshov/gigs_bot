@@ -1,4 +1,4 @@
-"""/start, /auth, /menu and mode-switch handlers."""
+"""/start, /auth, /menu handlers."""
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -22,14 +22,14 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         username=user.username,
         full_name=user.full_name,
     )
-    mode = await auth_service.get_user_mode(user.id)
     await message.answer(
         f"👋 Hello, {user.first_name}!\n\n"
         "I can help you manage your Google Calendar.\n"
-        "Use /auth to connect your Google account.",
+        "Use /auth to connect your Google account.\n\n"
+        "You can use the buttons below or just type in plain text.",
         reply_markup=menu_reply_kb(),
     )
-    await message.answer("📋 Main menu:", reply_markup=main_menu_kb(mode))
+    await message.answer("📋 Main menu:", reply_markup=main_menu_kb())
 
 
 @router.message(Command("auth"))
@@ -53,8 +53,7 @@ async def cmd_menu(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
         return
     await state.clear()
-    mode = await auth_service.get_user_mode(message.from_user.id)
-    await message.answer("📋 Main menu:", reply_markup=main_menu_kb(mode))
+    await message.answer("📋 Main menu:", reply_markup=main_menu_kb())
 
 
 @router.message(F.text == "📋 Menu")
@@ -63,8 +62,7 @@ async def reply_menu_button(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
         return
     await state.clear()
-    mode = await auth_service.get_user_mode(message.from_user.id)
-    await message.answer("📋 Main menu:", reply_markup=main_menu_kb(mode))
+    await message.answer("📋 Main menu:", reply_markup=main_menu_kb())
 
 
 @router.message(Command("disconnect"))
@@ -80,24 +78,5 @@ async def cb_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or not isinstance(callback.message, Message):
         return
     await state.clear()
-    mode = await auth_service.get_user_mode(callback.from_user.id)
-    await callback.message.edit_text("📋 Main menu:", reply_markup=main_menu_kb(mode))
+    await callback.message.edit_text("📋 Main menu:", reply_markup=main_menu_kb())
     await callback.answer()
-
-
-@router.callback_query(F.data == "switch_to_text")
-async def cb_switch_to_text(callback: CallbackQuery) -> None:
-    if callback.from_user is None or not isinstance(callback.message, Message):
-        return
-    await auth_service.set_user_mode(callback.from_user.id, "text")
-    await callback.message.edit_reply_markup(reply_markup=main_menu_kb("text"))
-    await callback.answer("Switched to 🤖 AI mode")
-
-
-@router.callback_query(F.data == "switch_to_button")
-async def cb_switch_to_button(callback: CallbackQuery) -> None:
-    if callback.from_user is None or not isinstance(callback.message, Message):
-        return
-    await auth_service.set_user_mode(callback.from_user.id, "button")
-    await callback.message.edit_reply_markup(reply_markup=main_menu_kb("button"))
-    await callback.answer("Switched to 🔘 Button mode")

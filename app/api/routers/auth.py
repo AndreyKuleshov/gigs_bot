@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.services.auth_service import auth_service
+from app.services.calendar_service import calendar_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -56,8 +57,17 @@ async def google_auth_callback(
         raise HTTPException(status_code=400, detail="Missing code or state")
 
     try:
-        await auth_service.handle_oauth_callback(code=code, state=state)
+        user_id = await auth_service.handle_oauth_callback(code=code, state=state)
     except ValueError as exc:
         return HTMLResponse(content=_ERROR_HTML.format(reason=str(exc)), status_code=400)
+
+    # Fetch and store the user's Google Calendar timezone
+    try:
+        creds = await auth_service.get_credentials(user_id)
+        if creds:
+            tz = await calendar_service.get_user_timezone(creds)
+            await auth_service.set_user_timezone(user_id, tz)
+    except Exception:
+        pass  # Non-critical, defaults to UTC
 
     return HTMLResponse(content=_SUCCESS_HTML, status_code=200)

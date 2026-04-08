@@ -169,6 +169,41 @@ class AuthService:
             if user is not None:
                 user.selected_calendar_id = calendar_id
 
+    # ──────────────────────────── Timezone ───────────────────────────────────
+
+    async def get_user_timezone(self, telegram_user_id: int) -> str:
+        """Return the user's timezone, auto-fetching from Google if still default."""
+        async with get_session() as session:
+            result = await session.execute(select(User.timezone).where(User.id == telegram_user_id))
+            row = result.scalar_one_or_none()
+        tz = row if row else "UTC"
+        if tz == "UTC":
+            # Try to auto-detect from Google Calendar
+            tz = await self._try_fetch_timezone(telegram_user_id) or tz
+        return tz
+
+    async def _try_fetch_timezone(self, telegram_user_id: int) -> str | None:
+        """Fetch timezone from Google Calendar and cache it. Returns None on failure."""
+        creds = await self.get_credentials(telegram_user_id)
+        if creds is None:
+            return None
+        try:
+            from app.services.calendar_service import calendar_service
+
+            tz = await calendar_service.get_user_timezone(creds)
+            if tz and tz != "UTC":
+                await self.set_user_timezone(telegram_user_id, tz)
+                return tz
+        except Exception:
+            pass
+        return None
+
+    async def set_user_timezone(self, telegram_user_id: int, timezone: str) -> None:
+        async with get_session() as session:
+            user = await session.get(User, telegram_user_id)
+            if user is not None:
+                user.timezone = timezone
+
     # ──────────────────────────── User helpers ────────────────────────────────
 
     async def get_or_create_user(
@@ -192,21 +227,6 @@ class AuthService:
                     await session.rollback()
                     user = await session.get(User, telegram_user_id)
         return user  # type: ignore[return-value]
-
-    async def get_user_mode(self, telegram_user_id: int) -> str:
-        async with get_session() as session:
-            result = await session.execute(select(User.mode).where(User.id == telegram_user_id))
-            row = result.scalar_one_or_none()
-        return row if row is not None else "button"
-
-    async def set_user_mode(self, telegram_user_id: int, mode: str) -> None:
-        async with get_session() as session:
-            user = await session.get(User, telegram_user_id)
-            if user is None:
-                user = User(id=telegram_user_id, mode=mode)
-                session.add(user)
-            else:
-                user.mode = mode
 
 
 auth_service = AuthService()

@@ -70,6 +70,24 @@ async def create_tables() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    # Lightweight column migrations for SQLite (create_all won't add new columns)
+    async with engine.begin() as conn:
+        await conn.run_sync(_add_missing_columns)
+
+
+def _add_missing_columns(conn) -> None:
+    """Add columns that create_all skips on existing tables."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(conn)
+    if "users" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("users")}
+    if "timezone" not in existing:
+        conn.execute(
+            text("ALTER TABLE users ADD COLUMN timezone VARCHAR(50) NOT NULL DEFAULT 'UTC'")
+        )
+
 
 async def close_engine() -> None:
     await engine.dispose()

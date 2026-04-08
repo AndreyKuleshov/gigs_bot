@@ -12,7 +12,8 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessageToolCall
@@ -38,6 +39,7 @@ class AgentResponse:
 
 _SYSTEM_PROMPT = (
     "You are a helpful calendar assistant. Today is {now}.\n"
+    "The user's timezone is {timezone}. Always use this timezone for dates and times.\n"
     "You manage the user's Google Calendar through the provided tools.\n"
     "Rules:\n"
     "- You do NOT know event IDs. Always call read_events first before "
@@ -359,7 +361,12 @@ class AIAgent:
 
         image_holder: list[str] = []
 
-        system_text = _SYSTEM_PROMPT.format(now=datetime.now(tz=UTC).isoformat())
+        user_tz = await auth_service.get_user_timezone(user_id)
+        tz = ZoneInfo(user_tz)
+        system_text = _SYSTEM_PROMPT.format(
+            now=datetime.now(tz=tz).isoformat(),
+            timezone=user_tz,
+        )
         messages: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": system_text},
             {"role": "user", "content": message},

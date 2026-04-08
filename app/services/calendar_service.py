@@ -18,6 +18,33 @@ from pydantic import BaseModel, field_validator
 
 logger = logging.getLogger(__name__)
 
+# Transient errors worth retrying (network blips, token-refresh timeouts, etc.)
+_TRANSIENT = (OSError, ConnectionError, TimeoutError)
+_MAX_RETRIES = 2
+_RETRY_DELAY = 1.0
+
+
+async def _retry(func):
+    """Run *func* in a thread, retrying on transient network errors."""
+    last_exc: BaseException | None = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            return await asyncio.to_thread(func)
+        except HttpError:
+            raise  # API-level errors are not transient
+        except _TRANSIENT as exc:
+            last_exc = exc
+            if attempt < _MAX_RETRIES:
+                logger.warning(
+                    "Transient error (attempt %d/%d): %s",
+                    attempt + 1,
+                    _MAX_RETRIES + 1,
+                    exc,
+                )
+                await asyncio.sleep(_RETRY_DELAY)
+    raise last_exc  # type: ignore[misc]
+
+
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
 
@@ -106,6 +133,20 @@ def _parse_event(raw: dict) -> EventRead:
 
 
 class CalendarService:
+    async def get_user_timezone(self, credentials: Credentials) -> str:
+        """Fetch the user's timezone from Google Calendar settings."""
+
+        def _call() -> str:
+            svc = _make_service(credentials)
+            setting = svc.settings().get(setting="timezone").execute()
+            return setting.get("value", "UTC")
+
+        try:
+            return await _retry(_call)
+        except Exception:
+            logger.warning("Could not fetch timezone, defaulting to UTC")
+            return "UTC"
+
     async def list_calendars(self, credentials: Credentials) -> list[CalendarRead]:
         """Return all calendars in the user's calendar list."""
 
@@ -114,9 +155,11 @@ class CalendarService:
             return svc.calendarList().list().execute().get("items", [])
 
         try:
-            items: list[dict] = await asyncio.to_thread(_call)
+            items: list[dict] = await _retry(_call)
         except HttpError as exc:
             raise RuntimeError(f"Google Calendar error: {exc.status_code} {exc.reason}") from exc
+        except _TRANSIENT as exc:
+            raise RuntimeError("Network error — please try again.") from exc
 
         return [
             CalendarRead(
@@ -155,9 +198,11 @@ class CalendarService:
             return svc.events().list(**kwargs).execute().get("items", [])
 
         try:
-            items: list[dict] = await asyncio.to_thread(_call)
+            items: list[dict] = await _retry(_call)
         except HttpError as exc:
             raise RuntimeError(f"Google Calendar error: {exc.status_code} {exc.reason}") from exc
+        except _TRANSIENT as exc:
+            raise RuntimeError("Network error — please try again.") from exc
 
         return [_parse_event(item) for item in items]
 
@@ -181,9 +226,11 @@ class CalendarService:
             return svc.events().insert(calendarId=calendar_id, body=body).execute()
 
         try:
-            raw: dict = await asyncio.to_thread(_call)
+            raw: dict = await _retry(_call)
         except HttpError as exc:
             raise RuntimeError(f"Google Calendar error: {exc.status_code} {exc.reason}") from exc
+        except _TRANSIENT as exc:
+            raise RuntimeError("Network error — please try again.") from exc
 
         return _parse_event(raw)
 
@@ -215,9 +262,11 @@ class CalendarService:
             )
 
         try:
-            raw: dict = await asyncio.to_thread(_call)
+            raw: dict = await _retry(_call)
         except HttpError as exc:
             raise RuntimeError(f"Google Calendar error: {exc.status_code} {exc.reason}") from exc
+        except _TRANSIENT as exc:
+            raise RuntimeError("Network error — please try again.") from exc
 
         return _parse_event(raw)
 
@@ -232,9 +281,11 @@ class CalendarService:
             svc.events().delete(calendarId=calendar_id, eventId=event_id).execute()
 
         try:
-            await asyncio.to_thread(_call)
+            await _retry(_call)
         except HttpError as exc:
             raise RuntimeError(f"Google Calendar error: {exc.status_code} {exc.reason}") from exc
+        except _TRANSIENT as exc:
+            raise RuntimeError("Network error — please try again.") from exc
 
 
 calendar_service = CalendarService()

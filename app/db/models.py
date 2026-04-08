@@ -26,6 +26,9 @@ class User(Base):
     # "button" or "text"
     mode: Mapped[str] = mapped_column(String(20), default="button", nullable=False)
 
+    # IANA timezone, e.g. "Europe/Moscow"
+    timezone: Mapped[str] = mapped_column(String(50), default="UTC", nullable=False)
+
     # Selected Google Calendar ID (defaults to primary calendar)
     selected_calendar_id: Mapped[str] = mapped_column(
         String(255), default="primary", nullable=False
@@ -42,7 +45,7 @@ class User(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<User id={self.id} mode={self.mode}>"
+        return f"<User id={self.id}>"
 
 
 class OAuthState(Base):

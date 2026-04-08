@@ -26,11 +26,6 @@ async def handle_free_text(message: Message) -> None:
         return
 
     user_id = message.from_user.id
-    mode = await auth_service.get_user_mode(user_id)
-
-    if mode != "text":
-        # Button mode: silently ignore plain text (user should press buttons)
-        return
 
     if not await auth_service.is_authenticated(user_id):
         await message.answer("⚠️ Please connect your Google account first. Use /auth")

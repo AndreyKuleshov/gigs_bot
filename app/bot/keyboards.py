@@ -24,7 +24,7 @@ def menu_reply_kb() -> ReplyKeyboardMarkup:
     )
 
 
-def main_menu_kb(mode: str = "button") -> InlineKeyboardMarkup:
+def main_menu_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
         InlineKeyboardButton(text="📅 List events", callback_data="list_events"),
@@ -35,12 +35,6 @@ def main_menu_kb(mode: str = "button") -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🗑 Delete event", callback_data="delete_event"),
     )
     b.row(InlineKeyboardButton(text="📆 Select calendar", callback_data="select_calendar"))
-    if mode == "button":
-        b.row(InlineKeyboardButton(text="Switch to 🤖 AI mode", callback_data="switch_to_text"))
-    else:
-        b.row(
-            InlineKeyboardButton(text="Switch to 🔘 Button mode", callback_data="switch_to_button")
-        )
     return b.as_markup()
 
 

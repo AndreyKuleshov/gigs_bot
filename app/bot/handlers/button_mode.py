@@ -1,6 +1,7 @@
 """Button mode: FSM-driven calendar CRUD via inline keyboards."""
 
-from datetime import UTC, datetime
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -104,10 +105,9 @@ async def fsm_cal_pick(callback: CallbackQuery, state: FSMContext) -> None:
     await auth_service.set_calendar_id(user_id, calendar_id)
     await state.clear()
 
-    mode = await auth_service.get_user_mode(user_id)
     await msg.edit_text(
         f"✅ Calendar set to <b>{display}</b>",
-        reply_markup=main_menu_kb(mode),
+        reply_markup=main_menu_kb(),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -202,9 +202,11 @@ async def fsm_create_start_time(message: Message, state: FSMContext) -> None:
     except ValueError:
         await message.answer("⚠️ Use format HH:MM (e.g. 14:30):", reply_markup=back_kb())
         return
+    user_id = message.from_user.id  # type: ignore[union-attr]
+    tz = ZoneInfo(await auth_service.get_user_timezone(user_id))
     data = await state.get_data()
     start = datetime.fromisoformat(data["start_date"]).replace(
-        hour=t.hour, minute=t.minute, tzinfo=UTC
+        hour=t.hour, minute=t.minute, tzinfo=tz
     )
     await state.update_data(start=start.isoformat())
     await state.set_state(CreateEventFSM.waiting_for_end_time)
@@ -268,8 +270,7 @@ async def fsm_create_confirm(callback: CallbackQuery, state: FSMContext) -> None
     choice = callback.data.split(":", 1)[1]
     if choice == "no":
         await state.clear()
-        mode = await auth_service.get_user_mode(user_id)
-        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb(mode))
+        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb())
         await callback.answer()
         return
 
@@ -363,8 +364,7 @@ async def fsm_delete_confirm(callback: CallbackQuery, state: FSMContext) -> None
     choice = callback.data.split(":", 1)[1]
     if choice == "no":
         await state.clear()
-        mode = await auth_service.get_user_mode(user_id)
-        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb(mode))
+        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb())
         await callback.answer()
         return
 
@@ -466,7 +466,9 @@ async def fsm_update_value(message: Message, state: FSMContext) -> None:
 
     if field in ("start", "end"):
         try:
-            parsed = datetime.strptime(raw, "%d.%m.%Y %H:%M").replace(tzinfo=UTC)
+            user_id = message.from_user.id  # type: ignore[union-attr]
+            tz = ZoneInfo(await auth_service.get_user_timezone(user_id))
+            parsed = datetime.strptime(raw, "%d.%m.%Y %H:%M").replace(tzinfo=tz)
         except ValueError:
             await message.answer(
                 "⚠️ Use format DD.MM.YYYY HH:MM (e.g. 25.12.2025 14:30):",
@@ -495,8 +497,7 @@ async def fsm_update_confirm(callback: CallbackQuery, state: FSMContext) -> None
     choice = callback.data.split(":", 1)[1]
     if choice == "no":
         await state.clear()
-        mode = await auth_service.get_user_mode(user_id)
-        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb(mode))
+        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb())
         await callback.answer()
         return
 
