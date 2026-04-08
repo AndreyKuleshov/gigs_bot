@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     # Optional HTTP/HTTPS proxy for outbound requests (e.g. PythonAnywhere: http://proxy.server:3128)
     proxy_url: str = ""
 
+    # Cron schedule for daily event reminders (e.g. "0 9 * * *" = every day at 9 AM UTC)
+    # Leave empty to disable. For testing: "* * * * *" (every minute)
+    reminder_cron: str = ""
+
     # FastAPI
     api_host: str = "0.0.0.0"
     api_port: int = 8000

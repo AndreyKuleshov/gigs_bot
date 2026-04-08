@@ -35,8 +35,18 @@ def _make_lifespan(preloaded_bot: Any = None, preloaded_dp: Any = None):
 
             app.state.polling_task = asyncio.create_task(start_polling(bot, dp))
 
+        # Reminder scheduler (runs in both webhook and polling modes)
+        if settings.reminder_cron:
+            import asyncio
+
+            from app.bot.scheduler import start_scheduler
+
+            app.state.scheduler_task = asyncio.create_task(start_scheduler(bot))
+
         yield
 
+        if hasattr(app.state, "scheduler_task"):
+            app.state.scheduler_task.cancel()
         if not settings.webhook_url:
             app.state.polling_task.cancel()
 
