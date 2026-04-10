@@ -336,6 +336,13 @@ class AIAgent:
             return "Error: user is not authenticated with Google. Ask them to run /auth."
 
         calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
+        user_tz = ZoneInfo(await auth_service.get_user_timezone(user_id))
+
+        def _fix_tz(iso: str) -> datetime:
+            """Parse ISO datetime and force the user's timezone."""
+            dt = datetime.fromisoformat(iso)
+            # Replace whatever offset the model used with the real user tz
+            return dt.replace(tzinfo=None).replace(tzinfo=user_tz)
 
         try:
             if name == "read_events":
@@ -366,14 +373,8 @@ class AIAgent:
             if name == "create_event":
                 ev = EventCreate(
                     summary=args["summary"],
-                    start=(
-                        datetime.fromisoformat(args["start_time"])
-                        if args.get("start_time")
-                        else None
-                    ),
-                    end=(
-                        datetime.fromisoformat(args["end_time"]) if args.get("end_time") else None
-                    ),
+                    start=_fix_tz(args["start_time"]) if args.get("start_time") else None,
+                    end=_fix_tz(args["end_time"]) if args.get("end_time") else None,
                     start_date=(
                         date.fromisoformat(args["start_date"]) if args.get("start_date") else None
                     ),
@@ -392,14 +393,8 @@ class AIAgent:
                 up = EventUpdate(
                     event_id=args["event_id"],
                     summary=args.get("summary"),
-                    start=(
-                        datetime.fromisoformat(args["start_time"])
-                        if args.get("start_time")
-                        else None
-                    ),
-                    end=(
-                        datetime.fromisoformat(args["end_time"]) if args.get("end_time") else None
-                    ),
+                    start=_fix_tz(args["start_time"]) if args.get("start_time") else None,
+                    end=_fix_tz(args["end_time"]) if args.get("end_time") else None,
                     start_date=(
                         date.fromisoformat(args["start_date"]) if args.get("start_date") else None
                     ),
