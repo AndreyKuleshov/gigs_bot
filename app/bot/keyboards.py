@@ -24,7 +24,9 @@ def menu_reply_kb() -> ReplyKeyboardMarkup:
     )
 
 
-def main_menu_kb(calendar_name: str | None = None) -> InlineKeyboardMarkup:
+def main_menu_kb(
+    calendar_name: str | None = None, timezone: str | None = None
+) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if calendar_name:
         b.row(
@@ -37,6 +39,8 @@ def main_menu_kb(calendar_name: str | None = None) -> InlineKeyboardMarkup:
         )
     cal_label = f"📆 {calendar_name}" if calendar_name else "📆 Select calendar"
     b.row(InlineKeyboardButton(text=cal_label, callback_data="select_calendar"))
+    tz_label = f"🕐 {timezone}" if timezone else "🕐 Set timezone"
+    b.row(InlineKeyboardButton(text=tz_label, callback_data="set_timezone"))
     return b.as_markup()
 
 
@@ -84,6 +88,29 @@ def start_time_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="📆 All day", callback_data="create_all_day"))
     b.row(InlineKeyboardButton(text="🔙 Cancel", callback_data="main_menu"))
+    return b.as_markup()
+
+
+_POPULAR_TIMEZONES = [
+    ("Europe/Moscow", "Москва (UTC+3)"),
+    ("Europe/Belgrade", "Белград (UTC+1/+2)"),
+    ("Europe/Kiev", "Киев (UTC+2/+3)"),
+    ("Europe/London", "Лондон (UTC+0/+1)"),
+    ("Europe/Berlin", "Берлин (UTC+1/+2)"),
+    ("Asia/Tbilisi", "Тбилиси (UTC+4)"),
+    ("Asia/Dubai", "Дубай (UTC+4)"),
+    ("Asia/Bangkok", "Бангкок (UTC+7)"),
+    ("US/Eastern", "Нью-Йорк (UTC-5/-4)"),
+    ("US/Pacific", "Лос-Анджелес (UTC-8/-7)"),
+]
+
+
+def timezone_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for tz_id, label in _POPULAR_TIMEZONES:
+        b.row(InlineKeyboardButton(text=label, callback_data=f"tz_pick:{tz_id}"))
+    b.row(InlineKeyboardButton(text="⌨️ Ввести вручную", callback_data="tz_custom"))
+    b.row(InlineKeyboardButton(text="🔙 Back", callback_data="main_menu"))
     return b.as_markup()
 
 

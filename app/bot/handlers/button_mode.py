@@ -24,6 +24,13 @@ from app.services.calendar_service import EventCreate, EventUpdate, calendar_ser
 router = Router(name="button_mode")
 
 
+async def _menu_kb(user_id: int):
+    """Build main menu keyboard with current calendar and timezone."""
+    cal = await auth_service.get_calendar_name(user_id)
+    tz = await auth_service.get_user_timezone(user_id)
+    return main_menu_kb(cal, tz if tz != "UTC" else None)
+
+
 # ── Type-narrowing helpers ────────────────────────────────────────────────────
 
 
@@ -120,7 +127,7 @@ async def fsm_cal_pick(callback: CallbackQuery, state: FSMContext) -> None:
 
     await msg.edit_text(
         f"✅ Calendar set to <b>{display}</b>",
-        reply_markup=main_menu_kb(display),
+        reply_markup=await _menu_kb(user_id),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -327,11 +334,10 @@ async def fsm_create_confirm(callback: CallbackQuery, state: FSMContext) -> None
         return
     user_id, msg = ctx
 
-    cal_name = await auth_service.get_calendar_name(user_id)
     choice = callback.data.split(":", 1)[1]
     if choice == "no":
         await state.clear()
-        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb(cal_name))
+        await msg.edit_text("❌ Cancelled.", reply_markup=await _menu_kb(user_id))
         await callback.answer()
         return
 
@@ -430,11 +436,10 @@ async def fsm_delete_confirm(callback: CallbackQuery, state: FSMContext) -> None
         return
     user_id, msg = ctx
 
-    cal_name = await auth_service.get_calendar_name(user_id)
     choice = callback.data.split(":", 1)[1]
     if choice == "no":
         await state.clear()
-        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb(cal_name))
+        await msg.edit_text("❌ Cancelled.", reply_markup=await _menu_kb(user_id))
         await callback.answer()
         return
 
@@ -564,11 +569,10 @@ async def fsm_update_confirm(callback: CallbackQuery, state: FSMContext) -> None
         return
     user_id, msg = ctx
 
-    cal_name = await auth_service.get_calendar_name(user_id)
     choice = callback.data.split(":", 1)[1]
     if choice == "no":
         await state.clear()
-        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb(cal_name))
+        await msg.edit_text("❌ Cancelled.", reply_markup=await _menu_kb(user_id))
         await callback.answer()
         return
 

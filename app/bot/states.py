@@ -29,3 +29,7 @@ class SelectCalendarFSM(StatesGroup):
 
 class AIConfirmFSM(StatesGroup):
     waiting = State()
+
+
+class SetTimezoneFSM(StatesGroup):
+    waiting_for_input = State()
