@@ -102,12 +102,21 @@ async def ai_confirm_callback(callback: CallbackQuery, state: FSMContext) -> Non
     data = await state.get_data()
     await state.clear()
 
+    pending_tool = data.get("pending_tool")
+    pending_args = data.get("pending_args")
+    if not pending_tool or pending_args is None:
+        await msg.edit_text("❌ Ошибка: действие устарело. Попробуй ещё раз.")
+        await callback.answer()
+        return
+
     await msg.edit_text("⏳ Выполняю…")
-    result = await ai_agent.execute_confirmed_action(
-        user_id, data["pending_tool"], data["pending_args"]
-    )
     try:
-        await msg.edit_text(f"✅ {result}", parse_mode="HTML")
+        result = await ai_agent.execute_confirmed_action(user_id, pending_tool, pending_args)
+        text = f"✅ {result}"
+    except Exception as exc:
+        text = f"❌ Ошибка: {exc}"
+    try:
+        await msg.edit_text(text, parse_mode="HTML")
     except Exception:
-        await msg.edit_text(f"✅ {result}")
+        await msg.edit_text(text)
     await callback.answer()

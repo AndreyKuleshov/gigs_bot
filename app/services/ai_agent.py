@@ -339,9 +339,13 @@ class AIAgent:
         user_tz = ZoneInfo(await auth_service.get_user_timezone(user_id))
 
         def _fix_tz(iso: str) -> datetime:
-            """Parse ISO datetime and force the user's timezone."""
+            """Parse ISO datetime and force the user's timezone.
+
+            The model may return a wrong UTC offset or a naive datetime.
+            We strip the offset and attach the real user timezone so that
+            "15:00" always means 15:00 in the user's local time.
+            """
             dt = datetime.fromisoformat(iso)
-            # Replace whatever offset the model used with the real user tz
             return dt.replace(tzinfo=None).replace(tzinfo=user_tz)
 
         try:

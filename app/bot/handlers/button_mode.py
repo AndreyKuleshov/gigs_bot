@@ -252,14 +252,14 @@ async def fsm_create_end_date(message: Message, state: FSMContext) -> None:
 
 @router.message(CreateEventFSM.waiting_for_start_time)
 async def fsm_create_start_time(message: Message, state: FSMContext) -> None:
-    if message.text is None:
+    if message.text is None or message.from_user is None:
         return
     try:
         t = datetime.strptime(message.text.strip(), "%H:%M").time()
     except ValueError:
         await message.answer("⚠️ Use format HH:MM (e.g. 14:30):", reply_markup=back_kb())
         return
-    user_id = message.from_user.id  # type: ignore[union-attr]
+    user_id = message.from_user.id
     tz = ZoneInfo(await auth_service.get_user_timezone(user_id))
     data = await state.get_data()
     start = datetime.fromisoformat(data["start_date"]).replace(
@@ -533,7 +533,7 @@ async def fsm_update_field_pick(callback: CallbackQuery, state: FSMContext) -> N
 
 @router.message(UpdateEventFSM.waiting_for_value)
 async def fsm_update_value(message: Message, state: FSMContext) -> None:
-    if message.text is None:
+    if message.text is None or message.from_user is None:
         return
     data = await state.get_data()
     field = data["field"]
@@ -541,7 +541,7 @@ async def fsm_update_value(message: Message, state: FSMContext) -> None:
 
     if field in ("start", "end"):
         try:
-            user_id = message.from_user.id  # type: ignore[union-attr]
+            user_id = message.from_user.id
             tz = ZoneInfo(await auth_service.get_user_timezone(user_id))
             parsed = datetime.strptime(raw, "%d.%m.%Y %H:%M").replace(tzinfo=tz)
         except ValueError:

@@ -6,7 +6,7 @@ and sends a Telegram message for each user that has at least one event.
 
 import logging
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot
 from sqlalchemy import select
@@ -46,7 +46,11 @@ async def _remind_user(bot: Bot, user_id: int, tz_name: str) -> bool:
     if creds is None:
         return False
 
-    tz = ZoneInfo(tz_name)
+    try:
+        tz = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, KeyError):
+        logger.warning("Invalid timezone for user %d: %s, using UTC", user_id, tz_name)
+        tz = ZoneInfo("UTC")
     now = datetime.now(tz=tz)
     tomorrow = now + timedelta(hours=24)
     calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
