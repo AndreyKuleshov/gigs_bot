@@ -24,14 +24,27 @@ _MAX_RETRIES = 2
 _RETRY_DELAY = 1.0
 
 
+_RETRYABLE_HTTP = {403, 429, 500, 503}
+
+
 async def _retry(func):
-    """Run *func* in a thread, retrying on transient network errors."""
+    """Run *func* in a thread, retrying on transient / retryable errors."""
     last_exc: BaseException | None = None
     for attempt in range(_MAX_RETRIES + 1):
         try:
             return await asyncio.to_thread(func)
-        except HttpError:
-            raise  # API-level errors are not transient
+        except HttpError as exc:
+            if exc.status_code not in _RETRYABLE_HTTP or attempt == _MAX_RETRIES:
+                raise
+            last_exc = exc
+            logger.warning(
+                "HTTP %d (attempt %d/%d): %s",
+                exc.status_code,
+                attempt + 1,
+                _MAX_RETRIES + 1,
+                exc.reason,
+            )
+            await asyncio.sleep(_RETRY_DELAY)
         except _TRANSIENT as exc:
             last_exc = exc
             if attempt < _MAX_RETRIES:

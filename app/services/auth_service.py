@@ -103,6 +103,7 @@ class AuthService:
             "client_id": creds.client_id,
             "client_secret": creds.client_secret,
             "scopes": list(creds.scopes or settings.google_scopes),
+            "expiry": creds.expiry.isoformat() if creds.expiry else None,
         }
         encrypted = encrypt_json(token_data)
 
@@ -132,6 +133,10 @@ class AuthService:
             logger.warning("Failed to decrypt tokens for user %d", telegram_user_id)
             return None
 
+        expiry = None
+        if data.get("expiry"):
+            expiry = datetime.fromisoformat(data["expiry"])
+
         return Credentials(
             token=data["token"],
             refresh_token=data.get("refresh_token"),
@@ -139,6 +144,7 @@ class AuthService:
             client_id=data.get("client_id"),
             client_secret=data.get("client_secret"),
             scopes=data.get("scopes"),
+            expiry=expiry,
         )
 
     async def is_authenticated(self, telegram_user_id: int) -> bool:

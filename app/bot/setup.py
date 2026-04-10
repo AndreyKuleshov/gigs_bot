@@ -1,5 +1,6 @@
 """Bot and Dispatcher factory."""
 
+import logging
 import os
 from typing import Any, cast
 
@@ -8,10 +9,13 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import ErrorEvent
 
 from app.bot.handlers import button_mode, common, text_mode
 from app.bot.middlewares.db_session import DbSessionMiddleware
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Sensible default: 30s total, 10s to establish connection.
 # Without an explicit timeout the aiohttp session can hang indefinitely.
@@ -91,5 +95,30 @@ def create_dispatcher() -> Dispatcher:
     dp.include_router(common.router)
     dp.include_router(button_mode.router)
     dp.include_router(text_mode.router)
+
+    @dp.errors()
+    async def _global_error_handler(event: ErrorEvent) -> bool:
+        logger.exception("Unhandled error: %s", event.exception)
+        # Try to notify the user
+        update = event.update
+        chat_id: int | None = None
+        if update.message:
+            chat_id = update.message.chat.id
+        elif update.callback_query and update.callback_query.message:
+            chat_id = update.callback_query.message.chat.id
+        if chat_id and event.update.bot:
+            try:
+                await event.update.bot.send_message(
+                    chat_id,
+                    "⚠️ Произошла ошибка, попробуй ещё раз.",
+                )
+            except Exception:
+                pass  # can't reach user — already logged above
+        if update.callback_query:
+            try:
+                await update.callback_query.answer()
+            except Exception:
+                pass
+        return True  # mark as handled
 
     return dp
