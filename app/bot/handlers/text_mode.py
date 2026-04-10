@@ -31,6 +31,10 @@ async def handle_free_text(message: Message) -> None:
         await message.answer("⚠️ Please connect your Google account first. Use /auth")
         return
 
+    if await auth_service.get_calendar_id(user_id) is None:
+        await message.answer("⚠️ Сначала выбери календарь — нажми 📋 Menu → 📆 Select calendar")
+        return
+
     thinking = await message.answer("🤔 Thinking…")
     response = await ai_agent.process_message(user_id, message.text)
 
