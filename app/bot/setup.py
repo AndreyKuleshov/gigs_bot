@@ -1,5 +1,6 @@
 """Bot and Dispatcher factory."""
 
+import asyncio
 import logging
 import os
 from typing import Any, cast
@@ -20,6 +21,8 @@ logger = logging.getLogger(__name__)
 # Sensible default: 30s total, 10s to establish connection.
 # Without an explicit timeout the aiohttp session can hang indefinitely.
 _BOT_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10)
+_PROXY_RETRIES = 2
+_PROXY_RETRY_DELAY = 1.0
 
 
 class _NativeProxySession(AiohttpSession):
@@ -41,28 +44,37 @@ class _NativeProxySession(AiohttpSession):
         method: Any,
         timeout: Any = None,
     ) -> Any:
-        session = await self.create_session()
-        url = self.api.api_url(token=bot.token, method=method.__api_method__)
-        form = self.build_form_data(bot=bot, method=method)
         effective_timeout = _BOT_TIMEOUT if timeout is None else timeout
-        try:
-            async with session.post(
-                url,
-                data=form,
-                timeout=effective_timeout,
-                proxy=self._native_proxy,
-            ) as resp:
-                raw_result = await resp.text()
-        except TimeoutError as exc:
-            raise TelegramNetworkError(method=method, message="Request timeout error") from exc
-        except aiohttp.ClientError as exc:
-            raise TelegramNetworkError(
-                method=method, message=f"{type(exc).__name__}: {exc}"
-            ) from exc
-        response = self.check_response(
-            bot=bot, method=method, status_code=resp.status, content=raw_result
-        )
-        return cast(Any, response.result)
+        last_exc: BaseException | None = None
+        for attempt in range(_PROXY_RETRIES + 1):
+            session = await self.create_session()
+            url = self.api.api_url(token=bot.token, method=method.__api_method__)
+            form = self.build_form_data(bot=bot, method=method)
+            try:
+                async with session.post(
+                    url,
+                    data=form,
+                    timeout=effective_timeout,
+                    proxy=self._native_proxy,
+                ) as resp:
+                    raw_result = await resp.text()
+                response = self.check_response(
+                    bot=bot, method=method, status_code=resp.status, content=raw_result
+                )
+                return cast(Any, response.result)
+            except TimeoutError as exc:
+                last_exc = exc
+            except aiohttp.ClientError as exc:
+                last_exc = exc
+            if attempt < _PROXY_RETRIES:
+                logger.warning(
+                    "Proxy error (attempt %d/%d): %s",
+                    attempt + 1,
+                    _PROXY_RETRIES + 1,
+                    last_exc,
+                )
+                await asyncio.sleep(_PROXY_RETRY_DELAY)
+        raise TelegramNetworkError(method=method, message=f"{type(last_exc).__name__}: {last_exc}")
 
 
 def create_bot() -> Bot:
