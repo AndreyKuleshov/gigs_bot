@@ -49,7 +49,7 @@ async def _remind_user(bot: Bot, user_id: int, tz_name: str) -> bool:
     tz = ZoneInfo(tz_name)
     now = datetime.now(tz=tz)
     tomorrow = now + timedelta(hours=24)
-    calendar_id = await auth_service.get_calendar_id(user_id)
+    calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
 
     events = await calendar_service.list_events(
         creds,

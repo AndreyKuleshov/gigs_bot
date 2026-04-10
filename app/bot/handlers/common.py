@@ -22,6 +22,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         username=user.username,
         full_name=user.full_name,
     )
+    cal_name = await auth_service.get_calendar_name(user.id)
     await message.answer(
         f"👋 Hello, {user.first_name}!\n\n"
         "I can help you manage your Google Calendar.\n"
@@ -29,7 +30,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         "You can use the buttons below or just type in plain text.",
         reply_markup=menu_reply_kb(),
     )
-    await message.answer("📋 Main menu:", reply_markup=main_menu_kb())
+    await message.answer("📋 Main menu:", reply_markup=main_menu_kb(cal_name))
 
 
 @router.message(Command("auth"))
@@ -53,7 +54,8 @@ async def cmd_menu(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
         return
     await state.clear()
-    await message.answer("📋 Main menu:", reply_markup=main_menu_kb())
+    cal_name = await auth_service.get_calendar_name(message.from_user.id)
+    await message.answer("📋 Main menu:", reply_markup=main_menu_kb(cal_name))
 
 
 @router.message(F.text == "📋 Menu")
@@ -62,7 +64,8 @@ async def reply_menu_button(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
         return
     await state.clear()
-    await message.answer("📋 Main menu:", reply_markup=main_menu_kb())
+    cal_name = await auth_service.get_calendar_name(message.from_user.id)
+    await message.answer("📋 Main menu:", reply_markup=main_menu_kb(cal_name))
 
 
 @router.message(Command("disconnect"))
@@ -78,5 +81,6 @@ async def cb_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or not isinstance(callback.message, Message):
         return
     await state.clear()
-    await callback.message.edit_text("📋 Main menu:", reply_markup=main_menu_kb())
+    cal_name = await auth_service.get_calendar_name(callback.from_user.id)
+    await callback.message.edit_text("📋 Main menu:", reply_markup=main_menu_kb(cal_name))
     await callback.answer()

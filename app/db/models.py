@@ -29,9 +29,12 @@ class User(Base):
     # IANA timezone, e.g. "Europe/Moscow"
     timezone: Mapped[str] = mapped_column(String(50), default="UTC", nullable=False)
 
-    # Selected Google Calendar ID (defaults to primary calendar)
-    selected_calendar_id: Mapped[str] = mapped_column(
-        String(255), default="primary", nullable=False
+    # Selected Google Calendar ID (NULL = not yet selected)
+    selected_calendar_id: Mapped[str | None] = mapped_column(
+        String(255), default=None, nullable=True
+    )
+    selected_calendar_name: Mapped[str | None] = mapped_column(
+        String(255), default=None, nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(

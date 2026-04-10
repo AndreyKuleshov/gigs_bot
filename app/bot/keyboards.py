@@ -24,17 +24,19 @@ def menu_reply_kb() -> ReplyKeyboardMarkup:
     )
 
 
-def main_menu_kb() -> InlineKeyboardMarkup:
+def main_menu_kb(calendar_name: str | None = None) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(
-        InlineKeyboardButton(text="📅 List events", callback_data="list_events"),
-        InlineKeyboardButton(text="➕ Create event", callback_data="create_event"),
-    )
-    b.row(
-        InlineKeyboardButton(text="✏️ Update event", callback_data="update_event"),
-        InlineKeyboardButton(text="🗑 Delete event", callback_data="delete_event"),
-    )
-    b.row(InlineKeyboardButton(text="📆 Select calendar", callback_data="select_calendar"))
+    if calendar_name:
+        b.row(
+            InlineKeyboardButton(text="📅 List events", callback_data="list_events"),
+            InlineKeyboardButton(text="➕ Create event", callback_data="create_event"),
+        )
+        b.row(
+            InlineKeyboardButton(text="✏️ Update event", callback_data="update_event"),
+            InlineKeyboardButton(text="🗑 Delete event", callback_data="delete_event"),
+        )
+    cal_label = f"📆 {calendar_name}" if calendar_name else "📆 Select calendar"
+    b.row(InlineKeyboardButton(text=cal_label, callback_data="select_calendar"))
     return b.as_markup()
 
 

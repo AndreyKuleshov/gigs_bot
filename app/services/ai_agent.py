@@ -310,7 +310,7 @@ class AIAgent:
         if credentials is None:
             return "Error: user is not authenticated with Google. Ask them to run /auth."
 
-        calendar_id = await auth_service.get_calendar_id(user_id)
+        calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
 
         try:
             if name == "read_events":

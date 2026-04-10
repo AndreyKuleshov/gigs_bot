@@ -41,7 +41,7 @@ def _ctx(callback: CallbackQuery) -> tuple[int, Message] | None:
     return callback.from_user.id, callback.message
 
 
-# ── Auth guard ────────────────────────────────────────────────────────────────
+# ── Auth & calendar guards ────────────────────────────────────────────────────
 
 
 async def _check_auth(callback: CallbackQuery) -> bool:
@@ -50,6 +50,17 @@ async def _check_auth(callback: CallbackQuery) -> bool:
         return False
     if not await auth_service.is_authenticated(callback.from_user.id):
         await callback.answer("⚠️ Connect your Google account first. Use /auth", show_alert=True)
+        return False
+    return True
+
+
+async def _check_calendar(callback: CallbackQuery) -> bool:
+    """Show an alert and return False when no calendar is selected."""
+    if callback.from_user is None:
+        return False
+    cal_id = await auth_service.get_calendar_id(callback.from_user.id)
+    if cal_id is None:
+        await callback.answer("⚠️ Select a calendar first!", show_alert=True)
         return False
     return True
 
@@ -104,12 +115,12 @@ async def fsm_cal_pick(callback: CallbackQuery, state: FSMContext) -> None:
 
     calendar_id = cal_ids[index]
     display = cal_names[index] if index < len(cal_names) else calendar_id
-    await auth_service.set_calendar_id(user_id, calendar_id)
+    await auth_service.set_calendar_id(user_id, calendar_id, display)
     await state.clear()
 
     await msg.edit_text(
         f"✅ Calendar set to <b>{display}</b>",
-        reply_markup=main_menu_kb(),
+        reply_markup=main_menu_kb(display),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -120,7 +131,7 @@ async def fsm_cal_pick(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "list_events")
 async def cb_list_events(callback: CallbackQuery) -> None:
-    if not await _check_auth(callback):
+    if not await _check_auth(callback) or not await _check_calendar(callback):
         return
     ctx = _ctx(callback)
     if ctx is None:
@@ -132,7 +143,7 @@ async def cb_list_events(callback: CallbackQuery) -> None:
         await callback.answer("Authentication error", show_alert=True)
         return
 
-    calendar_id = await auth_service.get_calendar_id(user_id)
+    calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
 
     try:
         events = await calendar_service.list_events(creds, calendar_id=calendar_id, max_results=10)
@@ -161,7 +172,7 @@ async def cb_list_events(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "create_event")
 async def cb_create_start(callback: CallbackQuery, state: FSMContext) -> None:
-    if not await _check_auth(callback):
+    if not await _check_auth(callback) or not await _check_calendar(callback):
         return
     ctx = _ctx(callback)
     if ctx is None:
@@ -316,10 +327,11 @@ async def fsm_create_confirm(callback: CallbackQuery, state: FSMContext) -> None
         return
     user_id, msg = ctx
 
+    cal_name = await auth_service.get_calendar_name(user_id)
     choice = callback.data.split(":", 1)[1]
     if choice == "no":
         await state.clear()
-        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb())
+        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb(cal_name))
         await callback.answer()
         return
 
@@ -329,7 +341,7 @@ async def fsm_create_confirm(callback: CallbackQuery, state: FSMContext) -> None
         await state.clear()
         return
 
-    calendar_id = await auth_service.get_calendar_id(user_id)
+    calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
     data = await state.get_data()
     if data.get("all_day"):
         event = EventCreate(
@@ -363,7 +375,7 @@ async def fsm_create_confirm(callback: CallbackQuery, state: FSMContext) -> None
 
 @router.callback_query(F.data == "delete_event")
 async def cb_delete_start(callback: CallbackQuery, state: FSMContext) -> None:
-    if not await _check_auth(callback):
+    if not await _check_auth(callback) or not await _check_calendar(callback):
         return
     ctx = _ctx(callback)
     if ctx is None:
@@ -375,7 +387,7 @@ async def cb_delete_start(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Authentication error", show_alert=True)
         return
 
-    calendar_id = await auth_service.get_calendar_id(user_id)
+    calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
 
     try:
         events = await calendar_service.list_events(creds, calendar_id=calendar_id, max_results=10)
@@ -418,10 +430,11 @@ async def fsm_delete_confirm(callback: CallbackQuery, state: FSMContext) -> None
         return
     user_id, msg = ctx
 
+    cal_name = await auth_service.get_calendar_name(user_id)
     choice = callback.data.split(":", 1)[1]
     if choice == "no":
         await state.clear()
-        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb())
+        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb(cal_name))
         await callback.answer()
         return
 
@@ -431,7 +444,7 @@ async def fsm_delete_confirm(callback: CallbackQuery, state: FSMContext) -> None
         await state.clear()
         return
 
-    calendar_id = await auth_service.get_calendar_id(user_id)
+    calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
     data = await state.get_data()
     try:
         await calendar_service.delete_event(creds, data["event_id"], calendar_id=calendar_id)
@@ -448,7 +461,7 @@ async def fsm_delete_confirm(callback: CallbackQuery, state: FSMContext) -> None
 
 @router.callback_query(F.data == "update_event")
 async def cb_update_start(callback: CallbackQuery, state: FSMContext) -> None:
-    if not await _check_auth(callback):
+    if not await _check_auth(callback) or not await _check_calendar(callback):
         return
     ctx = _ctx(callback)
     if ctx is None:
@@ -460,7 +473,7 @@ async def cb_update_start(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Authentication error", show_alert=True)
         return
 
-    calendar_id = await auth_service.get_calendar_id(user_id)
+    calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
 
     try:
         events = await calendar_service.list_events(creds, calendar_id=calendar_id, max_results=10)
@@ -551,10 +564,11 @@ async def fsm_update_confirm(callback: CallbackQuery, state: FSMContext) -> None
         return
     user_id, msg = ctx
 
+    cal_name = await auth_service.get_calendar_name(user_id)
     choice = callback.data.split(":", 1)[1]
     if choice == "no":
         await state.clear()
-        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb())
+        await msg.edit_text("❌ Cancelled.", reply_markup=main_menu_kb(cal_name))
         await callback.answer()
         return
 
@@ -564,7 +578,7 @@ async def fsm_update_confirm(callback: CallbackQuery, state: FSMContext) -> None
         await state.clear()
         return
 
-    calendar_id = await auth_service.get_calendar_id(user_id)
+    calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
     data = await state.get_data()
     field = data["field"]
     kwargs: dict = {"event_id": data["event_id"]}

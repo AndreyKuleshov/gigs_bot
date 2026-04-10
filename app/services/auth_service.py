@@ -159,21 +159,31 @@ class AuthService:
 
     # ──────────────────────────── Calendar selection ──────────────────────────
 
-    async def get_calendar_id(self, telegram_user_id: int) -> str:
-        """Return the calendar ID selected by this user, defaulting to 'primary'."""
+    async def get_calendar_id(self, telegram_user_id: int) -> str | None:
+        """Return the calendar ID selected by this user, or None if not chosen."""
         async with get_session() as session:
             result = await session.execute(
                 select(User.selected_calendar_id).where(User.id == telegram_user_id)
             )
-            row = result.scalar_one_or_none()
-        return row if row else "primary"
+            return result.scalar_one_or_none()
 
-    async def set_calendar_id(self, telegram_user_id: int, calendar_id: str) -> None:
-        """Persist the selected calendar ID for this user."""
+    async def get_calendar_name(self, telegram_user_id: int) -> str | None:
+        """Return the display name of the selected calendar, or None."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(User.selected_calendar_name).where(User.id == telegram_user_id)
+            )
+            return result.scalar_one_or_none()
+
+    async def set_calendar_id(
+        self, telegram_user_id: int, calendar_id: str, calendar_name: str
+    ) -> None:
+        """Persist the selected calendar ID and display name."""
         async with get_session() as session:
             user = await session.get(User, telegram_user_id)
             if user is not None:
                 user.selected_calendar_id = calendar_id
+                user.selected_calendar_name = calendar_name
 
     # ──────────────────────────── Timezone ───────────────────────────────────
 
