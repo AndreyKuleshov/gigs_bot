@@ -32,9 +32,19 @@ _MAX_TOOL_ROUNDS = 8
 
 
 @dataclass
+class PendingAction:
+    tool_name: str
+    args: dict
+
+
+@dataclass
 class AgentResponse:
     text: str
     image_url: str | None = None
+    pending_action: PendingAction | None = None
+
+
+_MUTATING_TOOLS = {"create_event", "update_event", "delete_event"}
 
 
 _SYSTEM_PROMPT = (
@@ -291,7 +301,12 @@ class AIAgent:
         return self._client
 
     async def _execute_tool(
-        self, user_id: int, name: str, args: dict, image_holder: list[str]
+        self,
+        user_id: int,
+        name: str,
+        args: dict,
+        image_holder: list[str],
+        pending_holder: list[PendingAction],
     ) -> str:
         if name == "web_search":
             return await _web_search(
@@ -306,6 +321,16 @@ class AIAgent:
                 return "Image found and will be displayed to the user."
             return "No suitable image found."
 
+        if name in _MUTATING_TOOLS:
+            pending_holder.append(PendingAction(tool_name=name, args=args))
+            return (
+                "This action requires user confirmation. "
+                "Describe exactly what you will do and ask the user to confirm."
+            )
+
+        return await self._run_calendar_tool(user_id, name, args)
+
+    async def _run_calendar_tool(self, user_id: int, name: str, args: dict) -> str:
         credentials = await auth_service.get_credentials(user_id)
         if credentials is None:
             return "Error: user is not authenticated with Google. Ask them to run /auth."
@@ -401,6 +426,10 @@ class AIAgent:
 
         return f"Unknown tool: {name}"
 
+    async def execute_confirmed_action(self, user_id: int, tool_name: str, args: dict) -> str:
+        """Execute a mutating calendar action after user confirmation."""
+        return await self._run_calendar_tool(user_id, tool_name, args)
+
     async def process_message(self, user_id: int, message: str) -> AgentResponse:
         """Run a free-text message through the AI model and return the final reply."""
         try:
@@ -409,6 +438,7 @@ class AIAgent:
             return AgentResponse(text=str(exc))
 
         image_holder: list[str] = []
+        pending_holder: list[PendingAction] = []
 
         user_tz = await auth_service.get_user_timezone(user_id)
         tz = ZoneInfo(user_tz)
@@ -447,7 +477,7 @@ class AIAgent:
                 except json.JSONDecodeError:
                     args = {}
                 tool_result = await self._execute_tool(
-                    user_id, tc.function.name, args, image_holder
+                    user_id, tc.function.name, args, image_holder, pending_holder
                 )
                 messages.append(
                     {
@@ -461,6 +491,7 @@ class AIAgent:
         return AgentResponse(
             text=last or "I couldn't generate a response.",
             image_url=image_holder[0] if image_holder else None,
+            pending_action=pending_holder[-1] if pending_holder else None,
         )
 
 

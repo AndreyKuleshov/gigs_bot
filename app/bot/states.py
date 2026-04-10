@@ -25,3 +25,7 @@ class DeleteEventFSM(StatesGroup):
 
 class SelectCalendarFSM(StatesGroup):
     selecting = State()
+
+
+class AIConfirmFSM(StatesGroup):
+    waiting = State()
