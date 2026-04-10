@@ -89,12 +89,11 @@ def _add_missing_columns(conn) -> None:
         )
     if "selected_calendar_name" not in existing:
         conn.execute(text("ALTER TABLE users ADD COLUMN selected_calendar_name VARCHAR(255)"))
-    # Migrate old default "primary" → NULL so users must explicitly select
+    # Migrate old default "primary" → empty so users must explicitly select
     if "selected_calendar_id" in existing:
         conn.execute(
             text(
-                "UPDATE users SET selected_calendar_id = NULL"
-                " WHERE selected_calendar_id = 'primary'"
+                "UPDATE users SET selected_calendar_id = '' WHERE selected_calendar_id = 'primary'"
             )
         )
 

@@ -165,7 +165,8 @@ class AuthService:
             result = await session.execute(
                 select(User.selected_calendar_id).where(User.id == telegram_user_id)
             )
-            return result.scalar_one_or_none()
+            val = result.scalar_one_or_none()
+            return val if val else None
 
     async def get_calendar_name(self, telegram_user_id: int) -> str | None:
         """Return the display name of the selected calendar, or None."""
@@ -173,7 +174,8 @@ class AuthService:
             result = await session.execute(
                 select(User.selected_calendar_name).where(User.id == telegram_user_id)
             )
-            return result.scalar_one_or_none()
+            val = result.scalar_one_or_none()
+            return val if val else None
 
     async def set_calendar_id(
         self, telegram_user_id: int, calendar_id: str, calendar_name: str
