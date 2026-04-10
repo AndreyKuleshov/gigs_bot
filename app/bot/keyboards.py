@@ -77,6 +77,14 @@ def back_kb() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def start_time_kb() -> InlineKeyboardMarkup:
+    """Prompt for start time with an 'All day' shortcut."""
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="📆 All day", callback_data="create_all_day"))
+    b.row(InlineKeyboardButton(text="🔙 Cancel", callback_data="main_menu"))
+    return b.as_markup()
+
+
 def update_field_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for field, label in [

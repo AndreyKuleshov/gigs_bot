@@ -1,6 +1,7 @@
 """Button mode: FSM-driven calendar CRUD via inline keyboards."""
 
-from datetime import datetime
+from datetime import date as date_type
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
@@ -13,6 +14,7 @@ from app.bot.keyboards import (
     confirm_kb,
     events_kb,
     main_menu_kb,
+    start_time_kb,
     update_field_kb,
 )
 from app.bot.states import CreateEventFSM, DeleteEventFSM, SelectCalendarFSM, UpdateEventFSM
@@ -190,7 +192,44 @@ async def fsm_create_start_date(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(start_date=date.isoformat())
     await state.set_state(CreateEventFSM.waiting_for_start_time)
-    await message.answer("🕐 Start time (HH:MM):", reply_markup=back_kb())
+    await message.answer("🕐 Start time (HH:MM) or press All day:", reply_markup=start_time_kb())
+
+
+@router.callback_query(CreateEventFSM.waiting_for_start_time, F.data == "create_all_day")
+async def fsm_create_all_day(callback: CallbackQuery, state: FSMContext) -> None:
+    ctx = _ctx(callback)
+    if ctx is None:
+        return
+    _, msg = ctx
+    await state.update_data(all_day=True)
+    await state.set_state(CreateEventFSM.waiting_for_end_date)
+    await msg.edit_text(
+        "📅 End date (DD.MM.YYYY).\nFor a single day, enter the same date:",
+        reply_markup=back_kb(),
+    )
+    await callback.answer()
+
+
+@router.message(CreateEventFSM.waiting_for_end_date)
+async def fsm_create_end_date(message: Message, state: FSMContext) -> None:
+    if message.text is None:
+        return
+    try:
+        end_date = datetime.strptime(message.text.strip(), "%d.%m.%Y").date()
+    except ValueError:
+        await message.answer("⚠️ Use format DD.MM.YYYY:", reply_markup=back_kb())
+        return
+    data = await state.get_data()
+    start_date = date_type.fromisoformat(data["start_date"])
+    if end_date < start_date:
+        await message.answer("⚠️ End date must be on or after start date:", reply_markup=back_kb())
+        return
+    # Google Calendar end date is exclusive — add one day
+    await state.update_data(end_date=(end_date + timedelta(days=1)).isoformat())
+    await state.set_state(CreateEventFSM.waiting_for_description)
+    await message.answer(
+        "📋 Description (optional – send /skip to leave empty):", reply_markup=back_kb()
+    )
 
 
 @router.message(CreateEventFSM.waiting_for_start_time)
@@ -244,14 +283,24 @@ async def fsm_create_description(message: Message, state: FSMContext) -> None:
     await state.update_data(description=desc)
 
     data = await state.get_data()
-    start = datetime.fromisoformat(data["start"])
-    end = datetime.fromisoformat(data["end"])
-    preview = (
-        f"<b>New event</b>\n"
-        f"Title: {data['summary']}\n"
-        f"Start: {start.strftime('%d.%m.%Y %H:%M')}\n"
-        f"End:   {end.strftime('%H:%M')}\n"
-    )
+    if data.get("all_day"):
+        s = date_type.fromisoformat(data["start_date"])
+        # end_date is stored as exclusive; show the real last day
+        e = date_type.fromisoformat(data["end_date"]) - timedelta(days=1)
+        if s == e:
+            date_line = f"Date:  {s.strftime('%d.%m.%Y')} (all day)"
+        else:
+            date_line = f"Dates: {s.strftime('%d.%m.%Y')} – {e.strftime('%d.%m.%Y')} (all day)"
+        preview = f"<b>New event</b>\nTitle: {data['summary']}\n{date_line}\n"
+    else:
+        start = datetime.fromisoformat(data["start"])
+        end = datetime.fromisoformat(data["end"])
+        preview = (
+            f"<b>New event</b>\n"
+            f"Title: {data['summary']}\n"
+            f"Start: {start.strftime('%d.%m.%Y %H:%M')}\n"
+            f"End:   {end.strftime('%H:%M')}\n"
+        )
     if desc:
         preview += f"Desc:  {desc}\n"
     preview += "\nCreate this event?"
@@ -282,12 +331,20 @@ async def fsm_create_confirm(callback: CallbackQuery, state: FSMContext) -> None
 
     calendar_id = await auth_service.get_calendar_id(user_id)
     data = await state.get_data()
-    event = EventCreate(
-        summary=data["summary"],
-        start=datetime.fromisoformat(data["start"]),
-        end=datetime.fromisoformat(data["end"]),
-        description=data.get("description"),
-    )
+    if data.get("all_day"):
+        event = EventCreate(
+            summary=data["summary"],
+            start_date=date_type.fromisoformat(data["start_date"]),
+            end_date=date_type.fromisoformat(data["end_date"]),
+            description=data.get("description"),
+        )
+    else:
+        event = EventCreate(
+            summary=data["summary"],
+            start=datetime.fromisoformat(data["start"]),
+            end=datetime.fromisoformat(data["end"]),
+            description=data.get("description"),
+        )
     try:
         created = await calendar_service.create_event(creds, event, calendar_id=calendar_id)
         await msg.edit_text(
