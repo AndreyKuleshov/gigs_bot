@@ -269,28 +269,35 @@ _TOOLS: list[dict] = [
 ]
 
 
+def _ddgs_proxy() -> str | None:
+    return settings.proxy_url or None
+
+
 def _ddgs_text_sync(query: str, max_results: int) -> list[dict]:
     from duckduckgo_search import DDGS
 
-    with DDGS() as ddgs:
+    with DDGS(proxy=_ddgs_proxy()) as ddgs:
         return list(ddgs.text(query, max_results=max_results))
 
 
 def _ddgs_images_sync(query: str) -> list[dict]:
     from duckduckgo_search import DDGS
 
-    with DDGS() as ddgs:
+    with DDGS(proxy=_ddgs_proxy()) as ddgs:
         return list(ddgs.images(query, type_image="photo", size="Large", max_results=5))
 
 
 async def _web_search(query: str, max_results: int = 5) -> str:
+    logger.info("web_search query=%r max_results=%d", query, max_results)
     try:
         results = await asyncio.to_thread(_ddgs_text_sync, query, max_results)
     except Exception as exc:
         logger.warning("web_search failed: %s", exc)
         return "Search temporarily unavailable."
     if not results:
+        logger.info("web_search returned 0 results")
         return "No results found."
+    logger.info("web_search returned %d results", len(results))
     lines = [f"{r['title']}\n{r['href']}\n{r['body']}" for r in results]
     return "\n\n".join(lines)
 
