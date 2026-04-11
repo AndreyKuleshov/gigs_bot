@@ -64,10 +64,17 @@ _SYSTEM_PROMPT = (
     "<code>code</code>. Use <b> for event titles and dates. Use bullet lists with •.\n"
     "- When the user asks WHEN something is (e.g. 'когда skillet?', 'when is the concert?'), "
     "ALWAYS call read_events first to check their calendar before searching the web.\n"
-    "- Use web_search ONLY to look up additional info about events already in the calendar "
-    "(e.g. venue details, artist info).\n"
-    "- Use find_event_image only when the user explicitly asks for a photo/image, "
-    "or when it clearly adds value. Do not call it speculatively."
+    "- When the user asks to FIND INFORMATION about something (e.g. 'найди информацию', "
+    "'find info about'), ALWAYS do ALL of these steps:\n"
+    "  1. Call read_events to find the event in the calendar.\n"
+    "  2. Call web_search to look up details (tickets, venue, lineup, times, prices, etc.).\n"
+    "  3. Call find_event_image to find a relevant photo.\n"
+    "  4. Present all found info to the user.\n"
+    "  5. Propose to update the calendar event with the found details "
+    "(add venue/location, description with useful info, etc.) via update_event.\n"
+    "- Use web_search to look up additional info about events "
+    "(e.g. venue details, artist info, ticket prices, setlists).\n"
+    "- Use find_event_image when searching for event info or when it clearly adds value."
 )
 
 _TOOLS: list[dict] = [
@@ -215,7 +222,8 @@ _TOOLS: list[dict] = [
             "name": "web_search",
             "description": (
                 "Search the web for current information about events, venues, artists, "
-                "or any topic. Use when the user asks about something you don't know."
+                "tickets, prices, or any topic. Use whenever the user asks to find "
+                "information, even if the event is already in the calendar."
             ),
             "parameters": {
                 "type": "object",
