@@ -80,6 +80,8 @@ _SYSTEM_PROMPT = (
     '  For links: <a href="https://example.com">Click here</a>.\n'
     "  For lists: use • bullet character.\n"
     "  For event titles and dates: use <b>.\n"
+    "  NEVER include images in your text. No ![alt](url), no <img> tags. "
+    "Images are handled automatically by the system via find_event_image tool.\n"
     "- When the user asks WHEN something is (e.g. 'когда skillet?', 'when is the concert?'), "
     "ALWAYS call read_events first to check their calendar before searching the web.\n"
     "- When the user asks to FIND INFORMATION about something (e.g. 'найди информацию', "
@@ -298,14 +300,26 @@ def _ddgs_text_sync(query: str, max_results: int) -> list[dict]:
 def _ddgs_images_sync(query: str) -> list[dict]:
     from ddgs import DDGS
 
+    # Try image API first
     try:
         with DDGS(proxy=_ddgs_proxy()) as ddgs:
-            return list(ddgs.images(query, type_image="photo", size="Large", max_results=5))
-    except Exception:
-        # Image API often returns 403 on shared IPs — fall back to text search
+            results = list(ddgs.images(query, type_image="photo", size="Large", max_results=5))
+            if results:
+                return results
+    except Exception as exc:
+        logger.info("ddgs.images failed (%s), trying simpler query", exc)
+
+    # Retry with simpler query
+    simple_query = query.split()[0] if query.split() else query
+    try:
         with DDGS(proxy=_ddgs_proxy()) as ddgs:
-            results = list(ddgs.text(f"{query} photo", max_results=3))
-            return [{"image": r["href"]} for r in results if r.get("href")]
+            results = list(ddgs.images(simple_query, max_results=5))
+            if results:
+                return results
+    except Exception as exc:
+        logger.info("ddgs.images retry failed (%s)", exc)
+
+    return []
 
 
 async def _web_search(query: str, max_results: int = 5) -> str:
