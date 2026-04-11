@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, Message, URLInputFile
 
 from app.bot.keyboards import confirm_kb
 from app.bot.states import AIConfirmFSM
+from app.core.config import settings
 from app.services.ai_agent import ai_agent
 from app.services.auth_service import auth_service
 
@@ -22,12 +23,23 @@ def _strip_html(text: str) -> str:
 
 def _clean_response(text: str) -> str:
     """Convert markdown remnants to Telegram HTML."""
-    # ![alt](url) → remove
-    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
+    # ![alt](url) → remove entire line
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)\s*", "", text)
     # <img> → remove
     text = re.sub(r"<img[^>]*>", "", text)
+    # Lines with only [text] (orphan image/alt references) → remove
+    text = re.sub(r"^\[[^\]]*\]\s*$", "", text, flags=re.MULTILINE)
+    # Lines about images ("Вот изображение", "Here is an image", etc.) → remove
+    text = re.sub(
+        r"^.*(?:вот изображение|here is (?:an |the )?image|вот фото|here is (?:a |the )?photo).*$",
+        "",
+        text,
+        flags=re.MULTILINE | re.IGNORECASE,
+    )
     # [text](url) → <a href="url">text</a> (only if not already inside an <a> tag)
     text = re.sub(r"(?<!href=\")\[([^\]]+)\]\((https?://[^)]+)\)", r'<a href="\2">\1</a>', text)
+    # Bare "ссылка (url)" or "link (url)" → <a href="url">ссылка</a>
+    text = re.sub(r"(\S+)\s+\((https?://[^)]+)\)", r'<a href="\2">\1</a>', text)
     # **bold** → <b>bold</b>
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
     # *italic* → <i>italic</i> (but not inside URLs)
@@ -95,30 +107,33 @@ async def handle_free_text(message: Message, state: FSMContext) -> None:
         return
 
     if response.image_url:
-        if thinking:
-            try:
-                await thinking.delete()
-            except Exception:
-                pass
-        caption = _strip_html(response.text)[:_MAX_CAPTION]
-        try:
-            await message.answer_photo(
-                photo=URLInputFile(response.image_url),
-                caption=caption,
-            )
-            # Send the full HTML-formatted text as a follow-up if it has formatting
-            if "<" in response.text:
+        if settings.proxy_url:
+            # sendPhoto fails through PythonAnywhere proxy — embed as link
+            response.text += f'\n\n🖼 <a href="{response.image_url}">Фото</a>'
+            response.image_url = None
+        else:
+            if thinking:
                 try:
-                    await message.answer(response.text, parse_mode="HTML")
+                    await thinking.delete()
                 except Exception:
-                    await message.answer(response.text)
-        except Exception:
-            # Image failed — fall back to text only
+                    pass
+                thinking = None
+            caption = _strip_html(response.text)[:_MAX_CAPTION]
             try:
-                await message.answer(response.text, parse_mode="HTML")
+                await message.answer_photo(
+                    photo=URLInputFile(response.image_url),
+                    caption=caption,
+                )
+                if "<" in response.text:
+                    try:
+                        await message.answer(response.text, parse_mode="HTML")
+                    except Exception:
+                        await message.answer(response.text)
+                return
             except Exception:
-                await message.answer(response.text)
-    elif thinking:
+                pass  # Fall through to text-only below
+
+    if thinking:
         try:
             await thinking.edit_text(response.text, parse_mode="HTML")
         except Exception:
