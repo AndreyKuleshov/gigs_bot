@@ -58,7 +58,10 @@ _SYSTEM_PROMPT = (
     "- You do NOT know event IDs. Always call read_events first before "
     "update_event or delete_event.\n"
     "- When creating events, always ask for both start and end times if not given.\n"
-    "- Respond in the same language the user uses.\n"
+    "- LANGUAGE RULE: Detect the language of the user's FIRST message and use ONLY that "
+    "language for the ENTIRE response. Never mix languages. If the user writes in Russian, "
+    "reply ONLY in Russian — even if search results or calendar data contain text in other "
+    "languages (Serbian, English, etc.). Translate all foreign data into the user's language.\n"
     "- Be concise.\n"
     "- Format responses using Telegram HTML: <b>bold</b>, <i>italic</i>, "
     "<code>code</code>. Use <b> for event titles and dates. Use bullet lists with •.\n"
@@ -67,7 +70,9 @@ _SYSTEM_PROMPT = (
     "- When the user asks to FIND INFORMATION about something (e.g. 'найди информацию', "
     "'find info about'), ALWAYS do ALL of these steps:\n"
     "  1. Call read_events to find the event in the calendar.\n"
-    "  2. Call web_search to look up details (tickets, venue, lineup, times, prices, etc.).\n"
+    "  2. Call web_search with an ENGLISH query for best results "
+    "(e.g. 'Skillet concert Belgrade May 2026 tickets venue'). "
+    "If the first search returns little info, try a second search with different keywords.\n"
     "  3. Call find_event_image to find a relevant photo.\n"
     "  4. Present all found info to the user.\n"
     "  5. Propose to update the calendar event with the found details "
@@ -222,8 +227,10 @@ _TOOLS: list[dict] = [
             "name": "web_search",
             "description": (
                 "Search the web for current information about events, venues, artists, "
-                "tickets, prices, or any topic. Use whenever the user asks to find "
-                "information, even if the event is already in the calendar."
+                "tickets, prices, or any topic. ALWAYS use English queries for best "
+                "coverage. Use whenever the user asks to find information, even if "
+                "the event is already in the calendar. If results are sparse, call "
+                "again with different keywords."
             ),
             "parameters": {
                 "type": "object",
