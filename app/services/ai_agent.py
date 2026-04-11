@@ -74,8 +74,12 @@ _SYSTEM_PROMPT = (
     "Translate ALL foreign text (addresses, venue names, search results) into {language}. "
     "For example: 'Žorža Klemansoa 37, Beograd' → 'ул. Жоржа Клемансо 37, Белград' in Russian.\n"
     "- Be concise.\n"
-    "- Format responses using Telegram HTML: <b>bold</b>, <i>italic</i>, "
-    "<code>code</code>. Use <b> for event titles and dates. Use bullet lists with •.\n"
+    "- FORMATTING: You output for Telegram. Use ONLY Telegram HTML tags:\n"
+    '  <b>bold</b>, <i>italic</i>, <code>code</code>, <a href="URL">link text</a>.\n'
+    "  NEVER use Markdown: no **, no ### headers, no [text](url), no ![image](url).\n"
+    '  For links: <a href="https://example.com">Click here</a>.\n'
+    "  For lists: use • bullet character.\n"
+    "  For event titles and dates: use <b>.\n"
     "- When the user asks WHEN something is (e.g. 'когда skillet?', 'when is the concert?'), "
     "ALWAYS call read_events first to check their calendar before searching the web.\n"
     "- When the user asks to FIND INFORMATION about something (e.g. 'найди информацию', "
