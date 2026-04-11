@@ -47,6 +47,17 @@ class AgentResponse:
 _MUTATING_TOOLS = {"create_event", "update_event", "delete_event"}
 
 
+def _detect_language(text: str) -> str:
+    """Detect language from user message. Simple heuristic based on character ranges."""
+    cyrillic = sum(1 for c in text if "\u0400" <= c <= "\u04ff")
+    latin = sum(1 for c in text if "a" <= c.lower() <= "z")
+    if cyrillic > latin:
+        return "Russian"
+    if latin > cyrillic:
+        return "English"
+    return "Russian"
+
+
 _SYSTEM_PROMPT = (
     "You are a calendar assistant. Today is {now}.\n"
     "The user's timezone is {timezone}. Always use this timezone for dates and times.\n"
@@ -58,10 +69,10 @@ _SYSTEM_PROMPT = (
     "- You do NOT know event IDs. Always call read_events first before "
     "update_event or delete_event.\n"
     "- When creating events, always ask for both start and end times if not given.\n"
-    "- LANGUAGE RULE: Detect the language of the user's FIRST message and use ONLY that "
-    "language for the ENTIRE response. Never mix languages. If the user writes in Russian, "
-    "reply ONLY in Russian — even if search results or calendar data contain text in other "
-    "languages (Serbian, English, etc.). Translate all foreign data into the user's language.\n"
+    "- LANGUAGE RULE: You MUST reply in {language}. Every single word of your response "
+    "must be in {language}. NEVER use Serbian, even if location data is in Serbian. "
+    "Translate ALL foreign text (addresses, venue names, search results) into {language}. "
+    "For example: 'Žorža Klemansoa 37, Beograd' → 'ул. Жоржа Клемансо 37, Белград' in Russian.\n"
     "- Be concise.\n"
     "- Format responses using Telegram HTML: <b>bold</b>, <i>italic</i>, "
     "<code>code</code>. Use <b> for event titles and dates. Use bullet lists with •.\n"
@@ -283,8 +294,14 @@ def _ddgs_text_sync(query: str, max_results: int) -> list[dict]:
 def _ddgs_images_sync(query: str) -> list[dict]:
     from duckduckgo_search import DDGS
 
-    with DDGS(proxy=_ddgs_proxy()) as ddgs:
-        return list(ddgs.images(query, type_image="photo", size="Large", max_results=5))
+    try:
+        with DDGS(proxy=_ddgs_proxy()) as ddgs:
+            return list(ddgs.images(query, type_image="photo", size="Large", max_results=5))
+    except Exception:
+        # Image API often returns 403 on shared IPs — fall back to text search
+        with DDGS(proxy=_ddgs_proxy()) as ddgs:
+            results = list(ddgs.text(f"{query} photo", max_results=3))
+            return [{"image": r["href"]} for r in results if r.get("href")]
 
 
 async def _web_search(query: str, max_results: int = 5) -> str:
@@ -463,9 +480,11 @@ class AIAgent:
 
         user_tz = await auth_service.get_user_timezone(user_id)
         tz = ZoneInfo(user_tz)
+        language = _detect_language(message)
         system_text = _SYSTEM_PROMPT.format(
             now=datetime.now(tz=tz).isoformat(),
             timezone=user_tz,
+            language=language,
         )
         messages: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": system_text},
