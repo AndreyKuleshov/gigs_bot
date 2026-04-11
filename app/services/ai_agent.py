@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from openai import AsyncOpenAI
@@ -407,6 +407,12 @@ class AIAgent:
             dt = datetime.fromisoformat(iso)
             return dt.replace(tzinfo=None).replace(tzinfo=user_tz)
 
+        def _fix_end(start: datetime | None, end: datetime | None) -> datetime | None:
+            """If end <= start (e.g. 20:00–00:00), push end to the next day."""
+            if start and end and end <= start:
+                end += timedelta(days=1)
+            return end
+
         try:
             if name == "read_events":
                 time_min: datetime | None = None
@@ -434,10 +440,12 @@ class AIAgent:
                 return "\n".join(lines)
 
             if name == "create_event":
+                start = _fix_tz(args["start_time"]) if args.get("start_time") else None
+                end = _fix_end(start, _fix_tz(args["end_time"]) if args.get("end_time") else None)
                 ev = EventCreate(
                     summary=args["summary"],
-                    start=_fix_tz(args["start_time"]) if args.get("start_time") else None,
-                    end=_fix_tz(args["end_time"]) if args.get("end_time") else None,
+                    start=start,
+                    end=end,
                     start_date=(
                         date.fromisoformat(args["start_date"]) if args.get("start_date") else None
                     ),
@@ -453,11 +461,15 @@ class AIAgent:
                 return f"Created: {created.summary} (ID:{created.event_id})"
 
             if name == "update_event":
+                u_start = _fix_tz(args["start_time"]) if args.get("start_time") else None
+                u_end = _fix_end(
+                    u_start, _fix_tz(args["end_time"]) if args.get("end_time") else None
+                )
                 up = EventUpdate(
                     event_id=args["event_id"],
                     summary=args.get("summary"),
-                    start=_fix_tz(args["start_time"]) if args.get("start_time") else None,
-                    end=_fix_tz(args["end_time"]) if args.get("end_time") else None,
+                    start=u_start,
+                    end=u_end,
                     start_date=(
                         date.fromisoformat(args["start_date"]) if args.get("start_date") else None
                     ),
