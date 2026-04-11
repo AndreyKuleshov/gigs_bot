@@ -285,14 +285,14 @@ def _ddgs_proxy() -> str | None:
 
 
 def _ddgs_text_sync(query: str, max_results: int) -> list[dict]:
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS
 
     with DDGS(proxy=_ddgs_proxy()) as ddgs:
         return list(ddgs.text(query, max_results=max_results))
 
 
 def _ddgs_images_sync(query: str) -> list[dict]:
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS
 
     try:
         with DDGS(proxy=_ddgs_proxy()) as ddgs:
