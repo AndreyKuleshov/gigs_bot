@@ -21,12 +21,22 @@ def _strip_html(text: str) -> str:
 
 
 def _clean_response(text: str) -> str:
-    """Remove markdown image/link syntax that Telegram can't render."""
-    # Remove ![alt](url)
+    """Convert markdown remnants to Telegram HTML."""
+    # ![alt](url) → remove
     text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
-    # Remove <img ...> tags
+    # <img> → remove
     text = re.sub(r"<img[^>]*>", "", text)
-    # Clean up leftover blank lines
+    # [text](url) → <a href="url">text</a> (only if not already inside an <a> tag)
+    text = re.sub(r"(?<!href=\")\[([^\]]+)\]\((https?://[^)]+)\)", r'<a href="\2">\1</a>', text)
+    # **bold** → <b>bold</b>
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    # *italic* → <i>italic</i> (but not inside URLs)
+    text = re.sub(r"(?<![/\w])\*(.+?)\*(?![/\w])", r"<i>\1</i>", text)
+    # ### headers → <b>header</b>
+    text = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", text, flags=re.MULTILINE)
+    # - list items → • bullet
+    text = re.sub(r"^- ", "• ", text, flags=re.MULTILINE)
+    # Clean up blank lines
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
