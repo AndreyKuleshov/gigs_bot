@@ -1,5 +1,6 @@
 """Free-text mode: route plain messages through the AI agent."""
 
+import logging
 import re
 
 from aiogram import F, Router
@@ -13,6 +14,7 @@ from app.services.ai_agent import ai_agent
 from app.services.auth_service import auth_service
 
 router = Router(name="text_mode")
+logger = logging.getLogger(__name__)
 
 _MAX_CAPTION = 1024
 
@@ -29,7 +31,7 @@ def _clean_response(text: str) -> str:
     text = re.sub(r"<img[^>]*>", "", text)
     # Lines with only [text] (orphan image/alt references) → remove
     text = re.sub(r"^\[[^\]]*\]\s*$", "", text, flags=re.MULTILINE)
-    # Lines about images ("Вот изображение", "Here is an image", etc.) → remove
+    # Lines about images → remove
     text = re.sub(
         r"^.*(?:вот изображение|here is (?:an |the )?image|вот фото|here is (?:a |the )?photo).*$",
         "",
@@ -38,8 +40,8 @@ def _clean_response(text: str) -> str:
     )
     # [text](url) → <a href="url">text</a> (only if not already inside an <a> tag)
     text = re.sub(r"(?<!href=\")\[([^\]]+)\]\((https?://[^)]+)\)", r'<a href="\2">\1</a>', text)
-    # Bare "ссылка (url)" or "link (url)" → <a href="url">ссылка</a>
-    text = re.sub(r"(\S+)\s+\((https?://[^)]+)\)", r'<a href="\2">\1</a>', text)
+    # "phrase (https://url)" → <a href="url">phrase</a>
+    text = re.sub(r"(.+?)\s+\((https?://[^)]+)\)", r'<a href="\2">\1</a>', text)
     # **bold** → <b>bold</b>
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
     # *italic* → <i>italic</i> (but not inside URLs)
@@ -51,6 +53,38 @@ def _clean_response(text: str) -> str:
     # Clean up blank lines
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+async def _send_text(target: Message, text: str, **kwargs) -> None:
+    """Send text with HTML, fallback to plain, swallow proxy errors."""
+    try:
+        await target.answer(text, parse_mode="HTML", **kwargs)
+    except Exception:
+        try:
+            await target.answer(text, **kwargs)
+        except Exception:
+            logger.warning("Failed to send response (proxy down?)")
+
+
+async def _edit_or_send(thinking: Message | None, fallback: Message, text: str, **kwargs) -> None:
+    """Edit the thinking message or send a new one. Swallow proxy errors."""
+    if thinking:
+        try:
+            await thinking.edit_text(text, parse_mode="HTML", **kwargs)
+            return
+        except Exception:
+            try:
+                await thinking.edit_text(text, **kwargs)
+                return
+            except Exception:
+                pass  # Fall through to send new message
+    try:
+        await fallback.answer(text, parse_mode="HTML", **kwargs)
+    except Exception:
+        try:
+            await fallback.answer(text, **kwargs)
+        except Exception:
+            logger.warning("Failed to send response (proxy down?)")
 
 
 @router.message(F.text)
@@ -90,25 +124,12 @@ async def handle_free_text(message: Message, state: FSMContext) -> None:
             pending_tool=response.pending_action.tool_name,
             pending_args=response.pending_action.args,
         )
-        try:
-            if thinking:
-                await thinking.edit_text(
-                    response.text, reply_markup=confirm_kb("ai_act"), parse_mode="HTML"
-                )
-            else:
-                await message.answer(
-                    response.text, reply_markup=confirm_kb("ai_act"), parse_mode="HTML"
-                )
-        except Exception:
-            if thinking:
-                await thinking.edit_text(response.text, reply_markup=confirm_kb("ai_act"))
-            else:
-                await message.answer(response.text, reply_markup=confirm_kb("ai_act"))
+        await _edit_or_send(thinking, message, response.text, reply_markup=confirm_kb("ai_act"))
         return
 
+    # Embed image as link when proxy is set (sendPhoto fails through proxy)
     if response.image_url:
         if settings.proxy_url:
-            # sendPhoto fails through PythonAnywhere proxy — embed as link
             response.text += f'\n\n🖼 <a href="{response.image_url}">Фото</a>'
             response.image_url = None
         else:
@@ -120,29 +141,14 @@ async def handle_free_text(message: Message, state: FSMContext) -> None:
                 thinking = None
             caption = _strip_html(response.text)[:_MAX_CAPTION]
             try:
-                await message.answer_photo(
-                    photo=URLInputFile(response.image_url),
-                    caption=caption,
-                )
+                await message.answer_photo(photo=URLInputFile(response.image_url), caption=caption)
                 if "<" in response.text:
-                    try:
-                        await message.answer(response.text, parse_mode="HTML")
-                    except Exception:
-                        await message.answer(response.text)
+                    await _send_text(message, response.text)
                 return
             except Exception:
-                pass  # Fall through to text-only below
+                pass  # Fall through to text-only
 
-    if thinking:
-        try:
-            await thinking.edit_text(response.text, parse_mode="HTML")
-        except Exception:
-            await thinking.edit_text(response.text)
-    else:
-        try:
-            await message.answer(response.text, parse_mode="HTML")
-        except Exception:
-            await message.answer(response.text)
+    await _edit_or_send(thinking, message, response.text)
 
 
 @router.callback_query(AIConfirmFSM.waiting, F.data.startswith("ai_act:"))
