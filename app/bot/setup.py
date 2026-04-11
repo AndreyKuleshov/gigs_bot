@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Sensible default: 30s total, 10s to establish connection.
 # Without an explicit timeout the aiohttp session can hang indefinitely.
 _BOT_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10)
-_PROXY_RETRIES = 2
+_PROXY_RETRIES = 5
 _PROXY_RETRY_DELAY = 1.0
 
 
@@ -73,7 +73,7 @@ class _NativeProxySession(AiohttpSession):
                     _PROXY_RETRIES + 1,
                     last_exc,
                 )
-                await asyncio.sleep(_PROXY_RETRY_DELAY)
+                await asyncio.sleep(_PROXY_RETRY_DELAY * (attempt + 1))
         raise TelegramNetworkError(method=method, message=f"{type(last_exc).__name__}: {last_exc}")
 
 
