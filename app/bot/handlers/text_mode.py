@@ -41,7 +41,13 @@ async def handle_free_text(message: Message, state: FSMContext) -> None:
     # New message cancels any pending AI confirmation
     await state.clear()
 
-    thinking = await message.answer("🤔 Thinking…")
+    # "Thinking" is cosmetic — don't crash if proxy is temporarily down
+    thinking = None
+    try:
+        thinking = await message.answer("🤔 Thinking…")
+    except Exception:
+        pass
+
     response = await ai_agent.process_message(user_id, message.text)
 
     if response.pending_action:
@@ -51,15 +57,27 @@ async def handle_free_text(message: Message, state: FSMContext) -> None:
             pending_args=response.pending_action.args,
         )
         try:
-            await thinking.edit_text(
-                response.text, reply_markup=confirm_kb("ai_act"), parse_mode="HTML"
-            )
+            if thinking:
+                await thinking.edit_text(
+                    response.text, reply_markup=confirm_kb("ai_act"), parse_mode="HTML"
+                )
+            else:
+                await message.answer(
+                    response.text, reply_markup=confirm_kb("ai_act"), parse_mode="HTML"
+                )
         except Exception:
-            await thinking.edit_text(response.text, reply_markup=confirm_kb("ai_act"))
+            if thinking:
+                await thinking.edit_text(response.text, reply_markup=confirm_kb("ai_act"))
+            else:
+                await message.answer(response.text, reply_markup=confirm_kb("ai_act"))
         return
 
     if response.image_url:
-        await thinking.delete()
+        if thinking:
+            try:
+                await thinking.delete()
+            except Exception:
+                pass
         caption = _strip_html(response.text)[:_MAX_CAPTION]
         try:
             await message.answer_photo(
@@ -78,11 +96,16 @@ async def handle_free_text(message: Message, state: FSMContext) -> None:
                 await message.answer(response.text, parse_mode="HTML")
             except Exception:
                 await message.answer(response.text)
-    else:
+    elif thinking:
         try:
             await thinking.edit_text(response.text, parse_mode="HTML")
         except Exception:
             await thinking.edit_text(response.text)
+    else:
+        try:
+            await message.answer(response.text, parse_mode="HTML")
+        except Exception:
+            await message.answer(response.text)
 
 
 @router.callback_query(AIConfirmFSM.waiting, F.data.startswith("ai_act:"))
