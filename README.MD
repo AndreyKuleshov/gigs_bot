@@ -1,11 +1,21 @@
 # Gigs Bot
 
-Telegram bot for managing Google Calendar. Supports two modes:
+Telegram bot for managing Google Calendar. Supports two interaction modes:
 
-- **Button mode** — deterministic FSM navigation via inline keyboards
-- **AI mode** — free-text input processed by OpenAI with calendar tool calls
+- **Button mode** — step-by-step FSM navigation via inline keyboards (create, list, update, delete events)
+- **AI mode** — free-text input processed by OpenAI with automatic calendar tool calls; mutating actions (create/update/delete) require user confirmation before execution
 
-CRUD: create, read, update, delete calendar events.
+### Features
+
+- Full CRUD for Google Calendar events (timed and all-day)
+- Calendar selection — choose which Google calendar to work with
+- Timezone selection — pick from popular timezones or enter a custom IANA zone
+- OAuth2 flow — connect your Google account directly from Telegram
+- Scheduled reminders via cron expression
+- Web search tool available in AI mode (DuckDuckGo)
+- Token encryption at rest (Fernet)
+- Proxy support for restricted environments (PythonAnywhere)
+- Global error handler — user-facing error messages in chat
 
 ---
 
@@ -13,12 +23,12 @@ CRUD: create, read, update, delete calendar events.
 
 | Layer | Tech |
 |---|---|
-| Bot | aiogram 3.x (long-polling) |
+| Bot | aiogram 3.x (long-polling / webhook) |
 | Backend | FastAPI + uvicorn |
-| Database | PostgreSQL + SQLAlchemy 2 async |
-| Cache / FSM | Redis |
-| AI | OpenAI (openai SDK) |
+| Database | SQLite (default) or PostgreSQL + SQLAlchemy 2 async |
+| AI | OpenAI function calling (gpt-4o-mini by default) |
 | Calendar | Google Calendar API v3 |
+| Encryption | cryptography (Fernet) |
 
 ---
 
@@ -27,12 +37,13 @@ CRUD: create, read, update, delete calendar events.
 ```
 app/
 ├── core/          config, token encryption (Fernet)
-├── db/            SQLAlchemy engine, ORM models
-├── cache/         Redis client factory
-├── services/      auth, calendar, AI agent
+├── db/            SQLAlchemy engine, ORM models, auto-migration
+├── services/      auth, calendar, AI agent, reminders
 ├── api/           FastAPI app + routers (OAuth callback, events CRUD)
-└── bot/           aiogram handlers, FSM states, keyboards, middleware
-main.py            entry point — runs bot + API in one asyncio loop
+└── bot/           aiogram handlers, FSM states, keyboards
+    └── handlers/  common, button_mode, text_mode (AI)
+main.py            entry point — runs bot + API
+tests/             unit tests (pytest + pytest-asyncio)
 ```
 
 ---
@@ -45,8 +56,6 @@ main.py            entry point — runs bot + API in one asyncio loop
 2. Send `/newbot`, follow the prompts (pick a name and username)
 3. BotFather replies with a token like `7123456789:AAH...`
 4. Copy it → `TELEGRAM_BOT_TOKEN`
-
----
 
 ### 2. Google OAuth2 credentials
 
@@ -68,23 +77,16 @@ main.py            entry point — runs bot + API in one asyncio loop
 
 > `GOOGLE_REDIRECT_URI` in `.env` must exactly match one of the URIs registered in step 4.
 
----
-
 ### 3. OpenAI API key
 
 1. Go to [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
 2. Click **Create new secret key**
 3. Copy the key → `OPENAI_API_KEY`
 
-Default model is `gpt-4o-mini` (fast, cheap). Change `OPENAI_MODEL` to
-`gpt-4o` if you need better reasoning.
-
----
-
 ### 4. Fernet encryption key
 
-Used to encrypt Google OAuth tokens before storing them in PostgreSQL.
-Generate once — **do not change it after first use** (changing it invalidates all stored tokens):
+Used to encrypt Google OAuth tokens before storing them in the database.
+Generate once — **do not change it after first use** (existing tokens become unreadable):
 
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
@@ -107,7 +109,6 @@ uv sync
 ```
 
 `uv sync` creates the virtualenv and installs all dependencies automatically.
-No manual activation needed — prefix subsequent commands with `uv run`.
 
 <details>
 <summary>Without uv (plain pip)</summary>
@@ -128,32 +129,9 @@ pip install -e .
 cp .env.example .env
 ```
 
-Edit `.env` and fill in all values:
+Edit `.env` and fill in all values (see `.env.example` for descriptions).
 
-```dotenv
-TELEGRAM_BOT_TOKEN=7123456789:AAH...
-GOOGLE_CLIENT_ID=123456789-abc.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=GOCSPX-...
-GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o-mini
-DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/gigs_bot
-REDIS_URL=redis://localhost:6379/0
-FERNET_KEY=<output of the generate command above>
-API_HOST=0.0.0.0
-API_PORT=8000
-DEBUG=false
-```
-
-### 3. Start PostgreSQL and Redis
-
-```bash
-docker compose up -d
-```
-
-Postgres is available on port `5433` (mapped to avoid conflicts with a local instance), Redis on `6379`.
-
-### 4. Run the bot
+### 3. Run the bot
 
 ```bash
 uv run python main.py
@@ -164,13 +142,43 @@ FastAPI interactive docs: [http://localhost:8000/docs](http://localhost:8000/doc
 
 ---
 
+## Running tests
+
+Install dev dependencies:
+
+```bash
+uv sync --extra dev
+```
+
+Run the full test suite:
+
+```bash
+uv run pytest
+```
+
+Run with verbose output:
+
+```bash
+uv run pytest -v
+```
+
+Run a specific test file:
+
+```bash
+uv run pytest tests/test_ai_agent.py
+```
+
+Tests use an in-memory SQLite database and fake credentials — no external services required.
+
+---
+
 ## Connecting a Google account
 
 1. Open the bot in Telegram and send `/start`
 2. Send `/auth` — the bot sends an OAuth authorisation link
 3. Open the link in a browser, sign in with Google, grant calendar access
 4. You are redirected back to `GOOGLE_REDIRECT_URI` (handled by FastAPI)
-5. Done — the bot is now ready to manage your calendar
+5. Done — select a calendar and timezone from the menu, then start managing events
 
 ---
 
@@ -209,6 +217,6 @@ Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
 - Replace `http://localhost:8000` with your public domain everywhere (`.env` and Google Cloud Console redirect URIs)
 - Set `DEBUG=false`
+- For PythonAnywhere: set `WEBHOOK_URL` and `WEBHOOK_SECRET`, configure `PROXY_URL` if needed
 - Store `FERNET_KEY` in a secret manager — losing it makes all stored tokens unreadable
 - Use a process manager (systemd, Docker, supervisord) to keep the process alive
-- For higher resilience, run the bot and API as separate processes
