@@ -20,6 +20,17 @@ def _strip_html(text: str) -> str:
     return re.sub(r"<[^>]+>", "", text)
 
 
+def _clean_response(text: str) -> str:
+    """Remove markdown image/link syntax that Telegram can't render."""
+    # Remove ![alt](url)
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
+    # Remove <img ...> tags
+    text = re.sub(r"<img[^>]*>", "", text)
+    # Clean up leftover blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 @router.message(F.text)
 async def handle_free_text(message: Message, state: FSMContext) -> None:
     # Ignore commands – let other routers handle them first
@@ -49,6 +60,7 @@ async def handle_free_text(message: Message, state: FSMContext) -> None:
         pass
 
     response = await ai_agent.process_message(user_id, message.text)
+    response.text = _clean_response(response.text)
 
     if response.pending_action:
         await state.set_state(AIConfirmFSM.waiting)
