@@ -8,12 +8,12 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from app.bot.handlers.common import _menu_kb
 from app.bot.keyboards import (
     back_kb,
     calendars_kb,
     confirm_kb,
     events_kb,
-    main_menu_kb,
     start_time_kb,
     update_field_kb,
 )
@@ -22,13 +22,6 @@ from app.services.auth_service import auth_service
 from app.services.calendar_service import EventCreate, EventUpdate, calendar_service
 
 router = Router(name="button_mode")
-
-
-async def _menu_kb(user_id: int):
-    """Build main menu keyboard with current calendar and timezone."""
-    cal = await auth_service.get_calendar_name(user_id)
-    tz = await auth_service.get_user_timezone(user_id)
-    return main_menu_kb(cal, tz if tz != "UTC" else None)
 
 
 # ── Type-narrowing helpers ────────────────────────────────────────────────────

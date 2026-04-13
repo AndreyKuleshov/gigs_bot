@@ -23,9 +23,6 @@ class User(Base):
     # Fernet-encrypted JSON blob of Google OAuth2 tokens
     google_tokens_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # "button" or "text"
-    mode: Mapped[str] = mapped_column(String(20), default="button", nullable=False)
-
     # IANA timezone, e.g. "Europe/Moscow"
     timezone: Mapped[str] = mapped_column(String(50), default="UTC", nullable=False)
 
