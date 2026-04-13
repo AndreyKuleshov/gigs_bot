@@ -161,7 +161,10 @@ async def ai_confirm_callback(callback: CallbackQuery, state: FSMContext) -> Non
     choice = callback.data.split(":", 1)[1] if callback.data else ""
     if choice == "no":
         await state.clear()
-        await msg.edit_text("❌ Отменено.")
+        try:
+            await msg.edit_text("❌ Отменено.")
+        except Exception:
+            pass
         await callback.answer()
         return
 
@@ -171,11 +174,17 @@ async def ai_confirm_callback(callback: CallbackQuery, state: FSMContext) -> Non
     pending_tool = data.get("pending_tool")
     pending_args = data.get("pending_args")
     if not pending_tool or pending_args is None:
-        await msg.edit_text("❌ Ошибка: действие устарело. Попробуй ещё раз.")
+        try:
+            await msg.edit_text("❌ Ошибка: действие устарело. Попробуй ещё раз.")
+        except Exception:
+            pass
         await callback.answer()
         return
 
-    await msg.edit_text("⏳ Выполняю…")
+    try:
+        await msg.edit_text("⏳ Выполняю…")
+    except Exception:
+        pass
     try:
         result = await ai_agent.execute_confirmed_action(user_id, pending_tool, pending_args)
         text = f"✅ {result}"
@@ -184,5 +193,8 @@ async def ai_confirm_callback(callback: CallbackQuery, state: FSMContext) -> Non
     try:
         await msg.edit_text(text, parse_mode="HTML")
     except Exception:
-        await msg.edit_text(text)
+        try:
+            await msg.edit_text(text)
+        except Exception:
+            logger.warning("Failed to send confirm result (proxy down?)")
     await callback.answer()
