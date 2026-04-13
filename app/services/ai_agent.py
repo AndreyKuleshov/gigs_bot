@@ -492,13 +492,21 @@ class AIAgent:
 
         except (RuntimeError, ValueError) as exc:
             logger.error("Tool %s failed: %s", name, exc)
+            if "404" in str(exc):
+                return "Error: event not found (maybe deleted). Call read_events to get fresh IDs."
             return f"Error in {name}: {exc}"
 
         return f"Unknown tool: {name}"
 
     async def execute_confirmed_action(self, user_id: int, tool_name: str, args: dict) -> str:
         """Execute a mutating calendar action after user confirmation."""
-        return await self._run_calendar_tool(user_id, tool_name, args)
+        try:
+            return await self._run_calendar_tool(user_id, tool_name, args)
+        except RuntimeError as exc:
+            msg = str(exc)
+            if "404" in msg:
+                return "Событие не найдено — возможно, оно было удалено. Попробуй ещё раз."
+            raise
 
     async def process_message(self, user_id: int, message: str) -> AgentResponse:
         """Run a free-text message through the AI model and return the final reply."""
