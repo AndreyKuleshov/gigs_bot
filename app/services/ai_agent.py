@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from google.auth.exceptions import RefreshError
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessageToolCall
 
@@ -490,6 +491,13 @@ class AIAgent:
                 )
                 return f"Deleted event {args['event_id']}."
 
+        except RefreshError:
+            logger.warning("Refresh token revoked for user %d, clearing credentials", user_id)
+            await auth_service.revoke_tokens(user_id)
+            return (
+                "Error: your Google authorization has expired or been revoked. "
+                "Please run /auth to reconnect your Google account."
+            )
         except (RuntimeError, ValueError) as exc:
             logger.error("Tool %s failed: %s", name, exc)
             if "404" in str(exc):
