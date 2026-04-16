@@ -71,6 +71,11 @@ _SYSTEM_PROMPT = (
     "Rules:\n"
     "- You do NOT know event IDs. Always call read_events first before "
     "update_event or delete_event.\n"
+    "- READ_EVENTS RULES:\n"
+    "  • If the user asks about a SPECIFIC DATE: set BOTH time_min and time_max "
+    "to exactly that day (e.g. time_min='2026-07-19T00:00:00' time_max='2026-07-20T00:00:00').\n"
+    "  • If no specific date: do NOT set time_min — the system defaults to now, "
+    "showing only future events. NEVER set time_min to a past date.\n"
     "- When creating events, always ask for both start and end times if not given.\n"
     "- LANGUAGE RULE: You MUST reply in {language}. Every single word of your response "
     "must be in {language}. NEVER use Serbian, even if location data is in Serbian. "
@@ -90,12 +95,18 @@ _SYSTEM_PROMPT = (
     "- When the user asks to FIND INFORMATION about something (e.g. 'найди информацию', "
     "'find info about'), ALWAYS do ALL of these steps:\n"
     "  1. Call read_events to find the event in the calendar.\n"
-    "  2. Call web_search with an ENGLISH query for best results "
-    "(e.g. 'Skillet concert Belgrade May 2026 tickets venue'). "
+    "  2. Call web_search with an ENGLISH query. ALWAYS include the EXACT DATE "
+    "from the calendar event in your query "
+    "(e.g. 'Skillet concert Belgrade May 28 2026 tickets venue'). "
     "If the first search returns little info, try a second search with different keywords.\n"
     "  3. Call find_event_image to find a relevant photo.\n"
-    "  4. Present all found info to the user.\n"
-    "  5. IMMEDIATELY call update_event to update the calendar event with found details "
+    "  4. DATE VERIFICATION (CRITICAL): Before presenting results, CHECK that any dates, "
+    "ticket links, or event pages from web search match the date in the user's calendar. "
+    "Events often have multiple dates in the same city. If a search result is for a "
+    "DIFFERENT DATE than the calendar event, DISCARD it and warn the user. "
+    "NEVER present ticket links or event pages without confirming the date matches.\n"
+    "  5. Present all verified info to the user.\n"
+    "  6. IMMEDIATELY call update_event to update the calendar event with found details "
     "(set description with key info like time/tickets/links, set location with venue address). "
     "Do NOT just ask the user — call update_event right away. "
     "The confirmation system will ask the user to approve.\n"
@@ -111,7 +122,8 @@ _TOOLS: list[dict] = [
             "name": "read_events",
             "description": (
                 "List calendar events. Call this first whenever you need an event_id. "
-                "Use time_min/time_max to target a specific date or range."
+                "If no time_min is set, only FUTURE events are returned. "
+                "For a specific date, set BOTH time_min and time_max to that day's boundaries."
             ),
             "parameters": {
                 "type": "object",
@@ -424,6 +436,10 @@ class AIAgent:
                     time_min = datetime.fromisoformat(args["time_min"])
                 if args.get("time_max"):
                     time_max = datetime.fromisoformat(args["time_max"])
+                # Prevent searching the past when no specific date range is intended
+                now = datetime.now(tz=user_tz)
+                if time_min and time_min < now and not time_max:
+                    time_min = None  # fall back to "from now"
                 events = await calendar_service.list_events(
                     credentials,
                     calendar_id=calendar_id,
