@@ -159,12 +159,20 @@ async def ai_confirm_callback(callback: CallbackQuery, state: FSMContext) -> Non
     msg = callback.message
 
     choice = callback.data.split(":", 1)[1] if callback.data else ""
+
+    # Always strip the inline buttons so the original proposal text stays visible.
+    try:
+        await msg.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
     if choice == "no":
         await state.clear()
         try:
-            await msg.edit_text("❌ Отменено.")
+            await msg.answer("❌ Отменено.")
         except Exception:
             pass
+        ai_agent.note_assistant(user_id, "[User declined the proposed calendar action.]")
         await callback.answer()
         return
 
@@ -175,14 +183,15 @@ async def ai_confirm_callback(callback: CallbackQuery, state: FSMContext) -> Non
     pending_args = data.get("pending_args")
     if not pending_tool or pending_args is None:
         try:
-            await msg.edit_text("❌ Ошибка: действие устарело. Попробуй ещё раз.")
+            await msg.answer("❌ Ошибка: действие устарело. Попробуй ещё раз.")
         except Exception:
             pass
         await callback.answer()
         return
 
+    busy = None
     try:
-        await msg.edit_text("⏳ Выполняю…")
+        busy = await msg.answer("⏳ Выполняю…")
     except Exception:
         pass
     try:
@@ -190,11 +199,18 @@ async def ai_confirm_callback(callback: CallbackQuery, state: FSMContext) -> Non
         text = f"✅ {result}"
     except Exception as exc:
         text = f"❌ Ошибка: {exc}"
+    ai_agent.note_assistant(user_id, f"[Confirmed action {pending_tool}: {text}]")
     try:
-        await msg.edit_text(text, parse_mode="HTML")
+        if busy:
+            await busy.edit_text(text, parse_mode="HTML")
+        else:
+            await msg.answer(text, parse_mode="HTML")
     except Exception:
         try:
-            await msg.edit_text(text)
+            if busy:
+                await busy.edit_text(text)
+            else:
+                await msg.answer(text)
         except Exception:
             logger.warning("Failed to send confirm result (proxy down?)")
     await callback.answer()

@@ -11,6 +11,7 @@ Design notes:
 import asyncio
 import json
 import logging
+from collections import deque
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -30,6 +31,7 @@ from app.services.calendar_service import (
 logger = logging.getLogger(__name__)
 
 _MAX_TOOL_ROUNDS = 8
+_HISTORY_TURNS = 10  # pairs of (user, assistant) messages retained per user
 
 
 @dataclass
@@ -106,10 +108,13 @@ _SYSTEM_PROMPT = (
     "DIFFERENT DATE than the calendar event, DISCARD it and warn the user. "
     "NEVER present ticket links or event pages without confirming the date matches.\n"
     "  5. Present all verified info to the user.\n"
-    "  6. IMMEDIATELY call update_event to update the calendar event with found details "
-    "(set description with key info like time/tickets/links, set location with venue address). "
-    "Do NOT just ask the user — call update_event right away. "
-    "The confirmation system will ask the user to approve.\n"
+    "  6. IMMEDIATELY call a mutating tool to persist the found details:\n"
+    "     - If step 1 found a matching calendar event, call update_event "
+    "(set description with key info like time/tickets/links, set location with venue address).\n"
+    "     - If there is NO matching calendar event, call create_event with the found "
+    "date/venue/details so the user can save it.\n"
+    "     Do NOT ask the user in plain text whether to create/update — always call the tool. "
+    "The confirmation system will ask the user to approve via buttons.\n"
     "- Use web_search to look up additional info about events "
     "(e.g. venue details, artist info, ticket prices, setlists).\n"
     "- Use find_event_image when searching for event info or when it clearly adds value."
@@ -366,6 +371,21 @@ async def _find_event_image(query: str) -> str | None:
 class AIAgent:
     def __init__(self) -> None:
         self._client: AsyncOpenAI | None = None
+        self._history: dict[int, deque[ChatCompletionMessageParam]] = {}
+
+    def _get_history(self, user_id: int) -> deque[ChatCompletionMessageParam]:
+        hist = self._history.get(user_id)
+        if hist is None:
+            hist = deque(maxlen=_HISTORY_TURNS * 2)
+            self._history[user_id] = hist
+        return hist
+
+    def note_assistant(self, user_id: int, text: str) -> None:
+        """Record a synthetic assistant message (e.g. confirmation outcome)
+        so the next turn knows what just happened."""
+        if not text:
+            return
+        self._get_history(user_id).append({"role": "assistant", "content": text})
 
     def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
@@ -552,8 +572,10 @@ class AIAgent:
             timezone=user_tz,
             language=language,
         )
+        history = self._get_history(user_id)
         messages: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": system_text},
+            *history,
             {"role": "user", "content": message},
         ]
 
@@ -594,6 +616,9 @@ class AIAgent:
                 )
 
         last = response.choices[0].message.content  # type: ignore[possibly-undefined]
+        if last:
+            history.append({"role": "user", "content": message})
+            history.append({"role": "assistant", "content": last})
         return AgentResponse(
             text=last or "I couldn't generate a response.",
             image_url=image_holder[0] if image_holder else None,
