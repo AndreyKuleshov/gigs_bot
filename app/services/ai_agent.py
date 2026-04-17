@@ -433,9 +433,9 @@ class AIAgent:
                 time_min: datetime | None = None
                 time_max: datetime | None = None
                 if args.get("time_min"):
-                    time_min = datetime.fromisoformat(args["time_min"])
+                    time_min = _fix_tz(args["time_min"])
                 if args.get("time_max"):
-                    time_max = datetime.fromisoformat(args["time_max"])
+                    time_max = _fix_tz(args["time_max"])
                 # Prevent searching the past when no specific date range is intended
                 now = datetime.now(tz=user_tz)
                 if time_min and time_min < now and not time_max:
