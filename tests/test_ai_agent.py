@@ -6,7 +6,12 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.services.ai_agent import AgentResponse, AIAgent, PendingAction
+from app.services.ai_agent import (
+    AgentResponse,
+    AIAgent,
+    PendingAction,
+    _detect_language,
+)
 
 
 class TestPendingAction:
@@ -134,3 +139,131 @@ class TestFixTz:
         result = _fix_tz("2025-06-01T15:00:00")
         assert result.hour == 15
         assert result.tzinfo == user_tz
+
+
+class TestDetectLanguage:
+    def test_cyrillic_dominant(self):
+        assert _detect_language("когда концерт?") == "Russian"
+
+    def test_latin_dominant(self):
+        assert _detect_language("when is the concert?") == "English"
+
+    def test_empty_defaults_to_russian(self):
+        assert _detect_language("") == "Russian"
+
+    def test_mixed_cyrillic_wins_on_tie(self):
+        # Ties fall through to Russian by design.
+        assert _detect_language("123 !!!") == "Russian"
+
+
+class TestHistory:
+    """Per-user conversation memory."""
+
+    def test_note_assistant_appends_to_history(self):
+        agent = AIAgent()
+        agent.note_assistant(42, "hello there")
+        hist = list(agent._get_history(42))
+        assert len(hist) == 1
+        assert hist[0].get("role") == "assistant"
+        assert hist[0].get("content") == "hello there"
+
+    def test_note_assistant_ignores_empty(self):
+        agent = AIAgent()
+        agent.note_assistant(42, "")
+        assert len(agent._get_history(42)) == 0
+
+    def test_history_is_per_user(self):
+        agent = AIAgent()
+        agent.note_assistant(1, "user 1 msg")
+        agent.note_assistant(2, "user 2 msg")
+        assert len(agent._get_history(1)) == 1
+        assert len(agent._get_history(2)) == 1
+        assert agent._get_history(1)[0].get("content") == "user 1 msg"
+
+    def test_history_is_capped(self):
+        from app.services.ai_agent import _HISTORY_TURNS
+
+        agent = AIAgent()
+        for i in range(_HISTORY_TURNS * 2 + 5):
+            agent.note_assistant(1, f"msg {i}")
+        hist = agent._get_history(1)
+        assert len(hist) == _HISTORY_TURNS * 2
+        # Oldest messages are dropped; the last one added should still be there.
+        assert hist[-1].get("content") == f"msg {_HISTORY_TURNS * 2 + 4}"
+
+
+class TestRunCalendarTool:
+    """Regression guards for the tz-aware/naive comparison bug."""
+
+    @pytest.fixture
+    def agent(self):
+        return AIAgent()
+
+    @pytest.mark.asyncio
+    async def test_read_events_accepts_naive_time_min(self, agent):
+        """Model may pass a naive ISO string; _fix_tz must attach user tz
+        so the `time_min < now` comparison doesn't raise."""
+        with (
+            patch("app.services.ai_agent.auth_service") as auth,
+            patch("app.services.ai_agent.calendar_service") as cal,
+        ):
+            auth.get_credentials = AsyncMock(return_value=object())
+            auth.get_calendar_id = AsyncMock(return_value="primary")
+            auth.get_user_timezone = AsyncMock(return_value="Europe/Belgrade")
+            cal.list_events = AsyncMock(return_value=[])
+
+            result = await agent._run_calendar_tool(
+                user_id=1,
+                name="read_events",
+                args={"time_min": "2099-01-01T10:00:00"},  # naive, future
+            )
+        assert result == "No upcoming events found."
+        # Verify time_min was passed through as tz-aware
+        assert cal.list_events.await_args is not None
+        kwargs = cal.list_events.await_args.kwargs
+        assert kwargs["time_min"].tzinfo is not None
+
+    @pytest.mark.asyncio
+    async def test_read_events_drops_past_time_min_when_no_time_max(self, agent):
+        """Past time_min without time_max should fall back to None (i.e. now)."""
+        with (
+            patch("app.services.ai_agent.auth_service") as auth,
+            patch("app.services.ai_agent.calendar_service") as cal,
+        ):
+            auth.get_credentials = AsyncMock(return_value=object())
+            auth.get_calendar_id = AsyncMock(return_value="primary")
+            auth.get_user_timezone = AsyncMock(return_value="Europe/Belgrade")
+            cal.list_events = AsyncMock(return_value=[])
+
+            await agent._run_calendar_tool(
+                user_id=1,
+                name="read_events",
+                args={"time_min": "2000-01-01T00:00:00"},  # past
+            )
+        assert cal.list_events.await_args is not None
+        assert cal.list_events.await_args.kwargs["time_min"] is None
+
+    @pytest.mark.asyncio
+    async def test_read_events_keeps_past_time_min_when_time_max_given(self, agent):
+        """A specific past date range (e.g. looking up yesterday) must be honored."""
+        with (
+            patch("app.services.ai_agent.auth_service") as auth,
+            patch("app.services.ai_agent.calendar_service") as cal,
+        ):
+            auth.get_credentials = AsyncMock(return_value=object())
+            auth.get_calendar_id = AsyncMock(return_value="primary")
+            auth.get_user_timezone = AsyncMock(return_value="Europe/Belgrade")
+            cal.list_events = AsyncMock(return_value=[])
+
+            await agent._run_calendar_tool(
+                user_id=1,
+                name="read_events",
+                args={
+                    "time_min": "2000-01-01T00:00:00",
+                    "time_max": "2000-01-02T00:00:00",
+                },
+            )
+        assert cal.list_events.await_args is not None
+        kwargs = cal.list_events.await_args.kwargs
+        assert kwargs["time_min"] is not None
+        assert kwargs["time_max"] is not None
