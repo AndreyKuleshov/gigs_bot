@@ -196,7 +196,10 @@ async def ai_confirm_callback(callback: CallbackQuery, state: FSMContext) -> Non
         pass
     try:
         result = await ai_agent.execute_confirmed_action(user_id, pending_tool, pending_args)
-        text = f"✅ {result}"
+        # _run_calendar_tool may return a user-facing error string (revoked token,
+        # 404, etc.) instead of raising. Don't slap a ✅ on those.
+        prefix = "❌" if result.lstrip().startswith(("Error", "Ошибка")) else "✅"
+        text = f"{prefix} {result}"
     except Exception as exc:
         text = f"❌ Ошибка: {exc}"
     ai_agent.note_assistant(user_id, f"[Confirmed action {pending_tool}: {text}]")
