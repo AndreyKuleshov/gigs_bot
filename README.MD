@@ -83,7 +83,6 @@ gigs_bot/
 ├── tests/                     # Unit test suite (pytest)
 ├── main.py                    # Entry point: FastAPI + bot (polling or webhook)
 ├── wsgi.py                    # PythonAnywhere WSGI entry point
-├── run_reminders.py           # Standalone reminder script for PythonAnywhere tasks
 ├── deploy.sh                  # Deployment script (git pull + pip install)
 └── pyproject.toml             # Project metadata, dependencies, tool configuration
 ```
