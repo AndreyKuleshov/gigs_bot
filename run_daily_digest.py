@@ -37,19 +37,22 @@ logger = logging.getLogger(__name__)
 async def _run_one_user(bot, user_id: int, force: bool) -> None:
     async with get_session() as session:
         row = await session.execute(
-            select(User.timezone, User.last_daily_sent_date).where(User.id == user_id)
+            select(User.timezone, User.full_name, User.last_daily_sent_date).where(
+                User.id == user_id
+            )
         )
         record = row.first()
     if record is None:
         logger.error("User %d not found", user_id)
         return
-    tz_name, last_sent = record
+    tz_name, full_name, last_sent = record
     sent = await send_daily_digest_to_user(
         bot,
         user_id,
         tz_name or "UTC",
         force=force,
         last_sent=last_sent,
+        full_name=full_name,
     )
     logger.info("User %d: %s", user_id, "sent" if sent else "skipped")
 
@@ -57,13 +60,17 @@ async def _run_one_user(bot, user_id: int, force: bool) -> None:
 async def _run_all_force(bot) -> None:
     async with get_session() as session:
         result = await session.execute(
-            select(User.id, User.timezone, User.username, User.last_daily_sent_date).where(
-                User.google_tokens_encrypted.isnot(None)
-            )
+            select(
+                User.id,
+                User.timezone,
+                User.username,
+                User.full_name,
+                User.last_daily_sent_date,
+            ).where(User.google_tokens_encrypted.isnot(None))
         )
         users = result.all()
     total = 0
-    for user_id, tz_name, username, last_sent in users:
+    for user_id, tz_name, username, full_name, last_sent in users:
         try:
             if await send_daily_digest_to_user(
                 bot,
@@ -71,6 +78,7 @@ async def _run_all_force(bot) -> None:
                 tz_name or "UTC",
                 force=True,
                 last_sent=last_sent,
+                full_name=full_name,
             ):
                 total += 1
         except Exception:

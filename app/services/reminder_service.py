@@ -5,6 +5,7 @@ and sends a Telegram message for each user that has at least one event.
 """
 
 import asyncio
+import html
 import logging
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -125,6 +126,21 @@ async def _remind_user(bot: Bot, user_id: int, tz_name: str) -> bool:
     return True
 
 
+def _greeting(full_name: str | None, hour: int) -> str:
+    """Time-of-day greeting in user's local hour, prefixed to the digest."""
+    if 5 <= hour < 12:
+        period = "Доброе утро"
+    elif 12 <= hour < 18:
+        period = "Добрый день"
+    elif 18 <= hour < 23:
+        period = "Добрый вечер"
+    else:
+        period = "Доброй ночи"
+    if full_name:
+        return f"{period}, <b>{html.escape(full_name)}</b>! 👋"
+    return f"{period}! 👋"
+
+
 def _resolve_tz(tz_name: str, user_id: int) -> ZoneInfo:
     try:
         return ZoneInfo(tz_name)
@@ -140,6 +156,7 @@ async def send_daily_digest_to_user(
     *,
     force: bool = False,
     last_sent: date | None = None,
+    full_name: str | None = None,
 ) -> bool:
     """Send today's events digest to one user.
 
@@ -181,8 +198,10 @@ async def send_daily_digest_to_user(
         logger.exception("Failed to fetch events for daily digest, user %d", user_id)
         return False
 
+    greeting = _greeting(full_name, now.hour)
+
     if events:
-        lines = ["📅 <b>События на сегодня:</b>\n"]
+        lines = [greeting, "", "📅 <b>События на сегодня:</b>\n"]
         for e in events:
             start_local = e.start.astimezone(tz)
             end_local = e.end.astimezone(tz)
@@ -195,7 +214,8 @@ async def send_daily_digest_to_user(
             lines.append(line)
         text = "\n".join(lines)
     else:
-        text = await _generate_empty_day_message()
+        empty_msg = await _generate_empty_day_message()
+        text = f"{greeting}\n\n{empty_msg}"
 
     await bot.send_message(user_id, text, parse_mode="HTML")
 
@@ -212,17 +232,26 @@ async def tick_daily_digests(bot: Bot) -> int:
     sent today. Returns the number of digests sent this tick."""
     async with get_session() as session:
         result = await session.execute(
-            select(User.id, User.timezone, User.username, User.last_daily_sent_date).where(
-                User.google_tokens_encrypted.isnot(None)
-            )
+            select(
+                User.id,
+                User.timezone,
+                User.username,
+                User.full_name,
+                User.last_daily_sent_date,
+            ).where(User.google_tokens_encrypted.isnot(None))
         )
         users = result.all()
 
     sent = 0
-    for user_id, tz_name, username, last_sent in users:
+    for user_id, tz_name, username, full_name, last_sent in users:
         try:
             if await send_daily_digest_to_user(
-                bot, user_id, tz_name or "UTC", force=False, last_sent=last_sent
+                bot,
+                user_id,
+                tz_name or "UTC",
+                force=False,
+                last_sent=last_sent,
+                full_name=full_name,
             ):
                 sent += 1
         except Exception:

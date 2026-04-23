@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.services.calendar_service import EventRead
-from app.services.reminder_service import send_daily_digest_to_user
+from app.services.reminder_service import _greeting, send_daily_digest_to_user
 
 TZ_NAME = "Europe/Belgrade"
 TZ = ZoneInfo(TZ_NAME)
@@ -84,7 +84,7 @@ async def test_empty_events_sends_llm_generated_message(deps, mock_bot):
     llm.assert_awaited_once()
     args, _ = mock_bot.send_message.await_args
     body = args[1]
-    assert body == "Ура, сегодня свободный день! 🎉"
+    assert "Ура, сегодня свободный день! 🎉" in body
 
 
 @pytest.mark.asyncio
@@ -157,6 +157,67 @@ async def test_updates_last_sent_date_on_success(deps, mock_bot):
     await send_daily_digest_to_user(mock_bot, user_id=42, tz_name=TZ_NAME, last_sent=None)
     # The UPDATE statement is executed once after a successful send.
     assert deps.session.execute.await_count == 1
+
+
+class TestGreeting:
+    def test_morning(self):
+        assert "Доброе утро" in _greeting("Andrei", 9)
+
+    def test_afternoon(self):
+        assert "Добрый день" in _greeting("Andrei", 14)
+
+    def test_evening(self):
+        assert "Добрый вечер" in _greeting("Andrei", 20)
+
+    def test_night(self):
+        assert "Доброй ночи" in _greeting("Andrei", 2)
+
+    def test_includes_bolded_name(self):
+        assert "<b>Andrei</b>" in _greeting("Andrei", 9)
+
+    def test_escapes_html_in_name(self):
+        # A name with HTML special chars must not break Telegram's parse_mode.
+        out = _greeting("<script>", 9)
+        assert "<script>" not in out
+        assert "&lt;script&gt;" in out
+
+    def test_no_name_renders_greeting_only(self):
+        out = _greeting(None, 9)
+        assert "Доброе утро" in out
+        assert "<b>" not in out
+
+
+@pytest.mark.asyncio
+async def test_greeting_prepended_in_events_message(deps, mock_bot):
+    deps.settings.daily_digest_hour = 0
+    start = datetime(2026, 4, 23, 14, 0, tzinfo=TZ)
+    end = datetime(2026, 4, 23, 15, 30, tzinfo=TZ)
+    deps.cal.list_events = AsyncMock(
+        return_value=[EventRead(event_id="e1", summary="Padel", start=start, end=end)]
+    )
+    await send_daily_digest_to_user(
+        mock_bot, user_id=1, tz_name=TZ_NAME, last_sent=None, full_name="Andrei"
+    )
+    body = mock_bot.send_message.await_args.args[1]
+    assert body.startswith(("Доброе утро", "Добрый день", "Добрый вечер", "Доброй ночи"))
+    assert "<b>Andrei</b>" in body
+    assert "Padel" in body
+
+
+@pytest.mark.asyncio
+async def test_greeting_prepended_in_empty_day_message(deps, mock_bot):
+    deps.settings.daily_digest_hour = 0
+    deps.cal.list_events = AsyncMock(return_value=[])
+    with patch(
+        "app.services.reminder_service._generate_empty_day_message",
+        new=AsyncMock(return_value="Свободный день! 🎉"),
+    ):
+        await send_daily_digest_to_user(
+            mock_bot, user_id=1, tz_name=TZ_NAME, last_sent=None, full_name="Andrei"
+        )
+    body = mock_bot.send_message.await_args.args[1]
+    assert "<b>Andrei</b>" in body
+    assert "Свободный день! 🎉" in body
 
 
 @pytest.mark.asyncio
