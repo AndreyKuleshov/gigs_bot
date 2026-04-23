@@ -50,6 +50,41 @@ class AgentResponse:
 _MUTATING_TOOLS = {"create_event", "update_event", "delete_event"}
 
 
+def _resolve_date_range(period: str, now: datetime) -> tuple[datetime, datetime]:
+    """Return ``(time_min, time_max)`` for a relative period in *now*'s timezone.
+
+    ``time_max`` is exclusive (midnight of the day AFTER the last day of the period).
+    Weekend = Saturday–Sunday; week = Monday–Sunday.
+    """
+    tz = now.tzinfo
+    today = now.date()
+    weekday = today.weekday()  # Mon=0 .. Sun=6
+
+    if period in ("this_weekend", "next_weekend"):
+        # Saturday of the current/upcoming weekend:
+        # Mon–Sat → upcoming (or same) Saturday; Sun → previous day's Saturday.
+        if weekday <= 5:
+            this_sat = today + timedelta(days=5 - weekday)
+        else:
+            this_sat = today - timedelta(days=1)
+        sat = this_sat + (timedelta(days=7) if period == "next_weekend" else timedelta(0))
+        mon = sat + timedelta(days=2)
+        start = datetime(sat.year, sat.month, sat.day, tzinfo=tz)
+        end = datetime(mon.year, mon.month, mon.day, tzinfo=tz)
+        return start, end
+
+    if period in ("this_week", "next_week"):
+        mon = today - timedelta(days=weekday)
+        if period == "next_week":
+            mon = mon + timedelta(days=7)
+        next_mon = mon + timedelta(days=7)
+        start = datetime(mon.year, mon.month, mon.day, tzinfo=tz)
+        end = datetime(next_mon.year, next_mon.month, next_mon.day, tzinfo=tz)
+        return start, end
+
+    raise ValueError(f"Unknown period: {period!r}")
+
+
 def _detect_language(text: str) -> str:
     """Detect language from user message. Simple heuristic based on character ranges."""
     cyrillic = sum(1 for c in text if "\u0400" <= c <= "\u04ff")
@@ -78,6 +113,11 @@ _SYSTEM_PROMPT = (
     "to exactly that day (e.g. time_min='2026-07-19T00:00:00' time_max='2026-07-20T00:00:00').\n"
     "  • If no specific date: do NOT set time_min — the system defaults to now, "
     "showing only future events. NEVER set time_min to a past date.\n"
+    "  • For RELATIVE PERIODS (weekend / week in any language — "
+    "'выходные', 'ближайшие выходные', 'этих выходных', 'следующие выходные', "
+    "'this week', 'next week', 'на этой неделе', etc.): FIRST call get_date_range "
+    "to resolve time_min/time_max, THEN call read_events with those bounds. "
+    "Do NOT compute weekend/week dates yourself — always use get_date_range.\n"
     "- When creating events, always ask for both start and end times if not given.\n"
     "- LANGUAGE RULE: You MUST reply in {language}. Every single word of your response "
     "must be in {language}. NEVER use Serbian, even if location data is in Serbian. "
@@ -263,6 +303,41 @@ _TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "get_date_range",
+            "description": (
+                "Resolve a relative date period (weekend / week) into ISO 8601 "
+                "time_min/time_max bounds in the user's timezone. "
+                "Call BEFORE read_events for queries like 'this weekend', "
+                "'ближайшие выходные', 'следующие выходные', 'next week', etc. "
+                "Do NOT use for specific calendar dates — pass those directly "
+                "to read_events."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "period": {
+                        "type": "string",
+                        "enum": [
+                            "this_weekend",
+                            "next_weekend",
+                            "this_week",
+                            "next_week",
+                        ],
+                        "description": (
+                            "this_weekend: upcoming Sat–Sun (or current, if today is Sat/Sun). "
+                            "next_weekend: the Sat–Sun one week after this_weekend. "
+                            "this_week: current Mon–Sun. "
+                            "next_week: next Mon–Sun."
+                        ),
+                    },
+                },
+                "required": ["period"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_search",
             "description": (
                 "Search the web for current information about events, venues, artists, "
@@ -402,6 +477,14 @@ class AIAgent:
         image_holder: list[str],
         pending_holder: list[PendingAction],
     ) -> str:
+        if name == "get_date_range":
+            user_tz = ZoneInfo(await auth_service.get_user_timezone(user_id))
+            try:
+                start, end = _resolve_date_range(args.get("period", ""), datetime.now(tz=user_tz))
+            except ValueError as exc:
+                return f"Error: {exc}"
+            return json.dumps({"time_min": start.isoformat(), "time_max": end.isoformat()})
+
         if name == "web_search":
             return await _web_search(
                 query=args.get("query", ""),
