@@ -7,9 +7,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.services.ai_agent import (
+    _SYSTEM_PROMPT,
     AgentResponse,
     AIAgent,
     PendingAction,
+    _city_from_tz,
     _detect_language,
     _resolve_date_range,
 )
@@ -140,6 +142,36 @@ class TestFixTz:
         result = _fix_tz("2025-06-01T15:00:00")
         assert result.hour == 15
         assert result.tzinfo == user_tz
+
+
+class TestCityFromTz:
+    def test_standard_tz(self):
+        assert _city_from_tz("Europe/Belgrade") == "Belgrade"
+
+    def test_multiword_city(self):
+        assert _city_from_tz("America/New_York") == "New York"
+
+    def test_three_part_tz(self):
+        # e.g. "America/Indiana/Indianapolis" — take the last segment
+        assert _city_from_tz("America/Indiana/Indianapolis") == "Indianapolis"
+
+    def test_bare_tz(self):
+        # "UTC" has no slash
+        assert _city_from_tz("UTC") == "UTC"
+
+
+class TestSystemPromptRendering:
+    def test_renders_with_city_placeholder(self):
+        """Regression: adding {city} to the prompt must not break formatting,
+        and the resolved city must appear in the output."""
+        rendered = _SYSTEM_PROMPT.format(
+            now="2026-04-23T09:00:00+02:00",
+            timezone="Europe/Belgrade",
+            city="Belgrade",
+            language="Russian",
+        )
+        assert "Belgrade" in rendered
+        assert "куда сходить" in rendered or "EVENT DISCOVERY" in rendered
 
 
 class TestDetectLanguage:

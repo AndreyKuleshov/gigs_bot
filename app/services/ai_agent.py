@@ -85,6 +85,16 @@ def _resolve_date_range(period: str, now: datetime) -> tuple[datetime, datetime]
     raise ValueError(f"Unknown period: {period!r}")
 
 
+def _city_from_tz(tz_name: str) -> str:
+    """Extract a human-readable city from an IANA tz name for search queries.
+
+    ``Europe/Belgrade`` → ``Belgrade``; ``America/New_York`` → ``New York``.
+    Falls back to the raw tz name if there's no ``/``.
+    """
+    last = tz_name.rsplit("/", 1)[-1]
+    return last.replace("_", " ")
+
+
 def _detect_language(text: str) -> str:
     """Detect language from user message. Simple heuristic based on character ranges."""
     cyrillic = sum(1 for c in text if "\u0400" <= c <= "\u04ff")
@@ -98,13 +108,18 @@ def _detect_language(text: str) -> str:
 
 _SYSTEM_PROMPT = (
     "You are a calendar assistant. Today is {now}.\n"
-    "The user's timezone is {timezone}. Always use this timezone for dates and times.\n"
+    "The user's timezone is {timezone}. The user's city is {city}. "
+    "Always use this timezone for dates and times, and this city as the default "
+    "location when searching for local events.\n"
     "You ONLY manage the user's Google Calendar through the provided tools.\n"
     "You must REFUSE any questions or requests not related to calendar events "
     "(e.g. general knowledge, chitchat, jokes). Politely reply that you can only "
     "help with calendar management.\n"
     "However, simple date/time questions (day of the week, how many days until a date, "
-    "etc.) ARE within your scope — you are a calendar assistant and should answer them.\n"
+    "etc.) ARE within your scope — you are a calendar assistant and should answer them. "
+    "DISCOVERING things to do (concerts, parties, stand-up, festivals, exhibitions, etc.) "
+    "in the user's city is ALSO within scope, because the goal is to help plan the "
+    "calendar — see the 'event discovery' rules below.\n"
     "Rules:\n"
     "- You do NOT know event IDs. Always call read_events first before "
     "update_event or delete_event.\n"
@@ -157,7 +172,26 @@ _SYSTEM_PROMPT = (
     "The confirmation system will ask the user to approve via buttons.\n"
     "- Use web_search to look up additional info about events "
     "(e.g. venue details, artist info, ticket prices, setlists).\n"
-    "- Use find_event_image when searching for event info or when it clearly adds value."
+    "- Use find_event_image when searching for event info or when it clearly adds value.\n"
+    "- EVENT DISCOVERY queries (e.g. 'куда сходить на выходных?', 'что происходит в "
+    "эту субботу?', 'where can I go tonight?', 'any stand-up this weekend?'):\n"
+    "  1. If the dates are RELATIVE (this weekend, next week, tonight, tomorrow…) "
+    "call get_date_range first; for a specific date use it directly.\n"
+    "  2. Call web_search with an ENGLISH query that includes the city, the date "
+    "range, and event-type keywords. Examples: "
+    "'concerts in {city} this weekend tickets', "
+    "'stand-up comedy {city} April 25 26 2026', "
+    "'parties events {city} {timezone} Saturday'. "
+    "If the first search is thin, call web_search again with different keywords "
+    "(e.g. add 'meetup', 'gig', 'festival', 'live music').\n"
+    "  3. Present 3-5 concrete options. For EACH one include: "
+    "<b>name</b>, date/time, venue, and a clickable ticket/info link "
+    '(use <a href="...">text</a>). If you couldn\'t find reliable info for an '
+    "option, skip it — don't invent details.\n"
+    "  4. At the end, ask the user which one(s) they'd like to add to the calendar. "
+    "If they confirm, call create_event for each picked one.\n"
+    "  5. NEVER fabricate events, ticket URLs, venues, or dates. If the web search "
+    "didn't surface usable info, say so honestly instead of making things up."
 )
 
 _TOOLS: list[dict] = [
@@ -653,6 +687,7 @@ class AIAgent:
         system_text = _SYSTEM_PROMPT.format(
             now=datetime.now(tz=tz).isoformat(),
             timezone=user_tz,
+            city=_city_from_tz(user_tz),
             language=language,
         )
         history = self._get_history(user_id)
