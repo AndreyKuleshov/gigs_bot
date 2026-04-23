@@ -27,11 +27,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     user = message.from_user
     if user is None:
         return
-    await auth_service.get_or_create_user(
-        telegram_user_id=user.id,
-        username=user.username,
-        full_name=user.full_name,
-    )
+    # User row is already ensured by UserSyncMiddleware on every update.
     await message.answer(
         f"👋 Hello, {user.first_name}!\n\n"
         "I can help you manage your Google Calendar.\n"

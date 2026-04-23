@@ -26,17 +26,19 @@ async def send_reminders(bot: Bot) -> int:
     """
     async with get_session() as session:
         result = await session.execute(
-            select(User.id, User.timezone).where(User.google_tokens_encrypted.isnot(None))
+            select(User.id, User.timezone, User.username).where(
+                User.google_tokens_encrypted.isnot(None)
+            )
         )
         users = result.all()
 
     sent = 0
-    for user_id, tz_name in users:
+    for user_id, tz_name, username in users:
         try:
             if await _remind_user(bot, user_id, tz_name or "UTC"):
                 sent += 1
         except Exception:
-            logger.exception("Failed to send reminder to user %d", user_id)
+            logger.exception("Failed to send reminder to user %d (@%s)", user_id, username or "—")
     return sent
 
 

@@ -14,6 +14,7 @@ from aiogram.types import ErrorEvent
 
 from app.bot.handlers import button_mode, common, text_mode
 from app.bot.middlewares.db_session import DbSessionMiddleware
+from app.bot.middlewares.user_sync import UserSyncMiddleware
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,8 @@ def create_dispatcher() -> Dispatcher:
 
     # Middleware – injects AsyncSession into each update's data dict
     dp.update.middleware(DbSessionMiddleware())
+    # Middleware – upserts Telegram user info (id/username/full_name) on every update
+    dp.update.middleware(UserSyncMiddleware())
 
     # Routers must be registered in priority order:
     #   common → button_mode → text_mode
@@ -110,9 +113,15 @@ def create_dispatcher() -> Dispatcher:
 
     @dp.errors()
     async def _global_error_handler(event: ErrorEvent) -> bool:
-        logger.exception("Unhandled error: %s", event.exception)
-        # Try to notify the user
         update = event.update
+        user_info = ""
+        for attr in ("message", "callback_query", "edited_message"):
+            obj = getattr(update, attr, None)
+            if obj is not None and getattr(obj, "from_user", None):
+                u = obj.from_user
+                user_info = f" (user_id={u.id} @{u.username or '—'})"
+                break
+        logger.exception("Unhandled error%s: %s", user_info, event.exception)
         chat_id: int | None = None
         if update.message:
             chat_id = update.message.chat.id

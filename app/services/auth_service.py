@@ -204,12 +204,15 @@ class AuthService:
 
     # ──────────────────────────── User helpers ────────────────────────────────
 
-    async def get_or_create_user(
+    async def upsert_user_info(
         self,
         telegram_user_id: int,
+        *,
         username: str | None = None,
         full_name: str | None = None,
     ) -> User:
+        """Create the user row if missing; refresh username/full_name if they
+        have changed. Returns the (possibly updated) ``User``."""
         async with get_session() as session:
             user = await session.get(User, telegram_user_id)
             if user is None:
@@ -224,6 +227,11 @@ class AuthService:
                 except IntegrityError:
                     await session.rollback()
                     user = await session.get(User, telegram_user_id)
+            else:
+                if user.username != username:
+                    user.username = username
+                if user.full_name != full_name:
+                    user.full_name = full_name
         return user  # type: ignore[return-value]
 
 
