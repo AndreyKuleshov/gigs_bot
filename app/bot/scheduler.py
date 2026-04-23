@@ -33,12 +33,12 @@ async def start_scheduler(bot: Bot) -> None:
         if delay > 0:
             await asyncio.sleep(delay)
 
-        logger.info("Running scheduled reminders…")
         try:
             sent = await send_reminders(bot)
-            logger.info("Reminders sent to %d user(s)", sent)
-        except Exception:
-            logger.exception("Scheduled reminder failed")
+            if sent:
+                logger.info("Reminders sent to %d user(s)", sent)
+        except Exception as exc:
+            logger.warning("Scheduled reminder failed: %s: %s", type(exc).__name__, exc)
 
 
 async def start_daily_digest_scheduler(bot: Bot) -> None:
