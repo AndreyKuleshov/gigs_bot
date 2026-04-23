@@ -145,8 +145,12 @@ async def _fetch_and_persist_full_name(bot: Bot, user_id: int) -> str | None:
     """
     try:
         chat = await bot.get_chat(user_id)
-    except Exception:
-        logger.warning("bot.get_chat failed for user %d", user_id, exc_info=True)
+    except Exception as exc:
+        logger.info(
+            "bot.get_chat failed for user %d (%s) — rendering name-less greeting",
+            user_id,
+            type(exc).__name__,
+        )
         return None
     fetched = getattr(chat, "full_name", None)
     if not fetched:
@@ -249,13 +253,29 @@ async def send_daily_digest_to_user(
         empty_msg = await _generate_empty_day_message()
         text = f"{greeting}\n\n{empty_msg}"
 
-    await bot.send_message(user_id, text, parse_mode="HTML")
+    delivered = False
+    try:
+        await bot.send_message(user_id, text, parse_mode="HTML")
+        delivered = True
+    except Exception as exc:
+        # Don't spam the error log every 60s: WARNING, no stack trace.
+        # Common causes: user blocked the bot (403), network blip, Telegram
+        # rate limit. We still mark the day as "attempted" so the scheduler
+        # doesn't retry in a tight loop — next attempt is tomorrow.
+        logger.warning(
+            "Daily digest send failed for user %d: %s: %s",
+            user_id,
+            type(exc).__name__,
+            exc,
+        )
 
+    # Always bump last_daily_sent_date — whether we delivered or failed —
+    # so a persistent send error doesn't cause a per-minute retry storm.
     async with get_session() as session:
         await session.execute(
             update(User).where(User.id == user_id).values(last_daily_sent_date=today_local)
         )
-    return True
+    return delivered
 
 
 async def tick_daily_digests(bot: Bot) -> int:
@@ -286,6 +306,16 @@ async def tick_daily_digests(bot: Bot) -> int:
                 full_name=full_name,
             ):
                 sent += 1
-        except Exception:
-            logger.exception("Daily digest failed for user %d (@%s)", user_id, username or "—")
+        except Exception as exc:
+            # send_daily_digest_to_user now swallows send errors internally,
+            # so reaching this branch means an unexpected bug. Keep WARNING
+            # (not ERROR) to avoid per-minute noise; full stack goes to DEBUG.
+            logger.warning(
+                "Daily digest iteration bug for user %d (@%s): %s: %s",
+                user_id,
+                username or "—",
+                type(exc).__name__,
+                exc,
+            )
+            logger.debug("Stack trace for user %d", user_id, exc_info=True)
     return sent

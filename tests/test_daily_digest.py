@@ -257,6 +257,26 @@ async def test_full_name_fallback_tolerates_get_chat_failure(deps, mock_bot):
 
 
 @pytest.mark.asyncio
+async def test_send_failure_still_marks_day_and_returns_false(deps, mock_bot):
+    """If bot.send_message fails (user blocked the bot, network blip), we must
+    still bump last_daily_sent_date so the scheduler doesn't retry every 60s.
+    Returns False to signal non-delivery."""
+    deps.settings.daily_digest_hour = 0
+    deps.cal.list_events = AsyncMock(return_value=[])
+    mock_bot.send_message = AsyncMock(side_effect=RuntimeError("Forbidden: bot was blocked"))
+    with patch(
+        "app.services.reminder_service._generate_empty_day_message",
+        new=AsyncMock(return_value="."),
+    ):
+        result = await send_daily_digest_to_user(
+            mock_bot, user_id=1, tz_name=TZ_NAME, last_sent=None
+        )
+    assert result is False
+    # UPDATE last_daily_sent_date was still executed (retry-storm guard).
+    assert deps.session.execute.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_no_send_when_credentials_missing(deps, mock_bot):
     deps.settings.daily_digest_hour = 0
     deps.auth.get_credentials = AsyncMock(return_value=None)

@@ -58,6 +58,9 @@ async def start_daily_digest_scheduler(bot: Bot) -> None:
             sent = await tick_daily_digests(bot)
             if sent:
                 logger.info("Daily digest sent to %d user(s)", sent)
-        except Exception:
-            logger.exception("Daily digest tick failed")
+        except Exception as exc:
+            # Fallback to WARNING so a transient tick failure doesn't spam
+            # the PA error log every 60s. Includes the exception class and
+            # message; omit stack trace unless DEBUG is enabled.
+            logger.warning("Daily digest tick failed: %s: %s", type(exc).__name__, exc)
         await asyncio.sleep(interval)
