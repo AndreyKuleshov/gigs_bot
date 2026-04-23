@@ -221,6 +221,42 @@ async def test_greeting_prepended_in_empty_day_message(deps, mock_bot):
 
 
 @pytest.mark.asyncio
+async def test_full_name_fallback_via_bot_get_chat(deps, mock_bot):
+    """If User.full_name is None, fetch it from Telegram and persist."""
+    deps.settings.daily_digest_hour = 0
+    deps.cal.list_events = AsyncMock(return_value=[])
+    mock_bot.get_chat = AsyncMock(return_value=SimpleNamespace(full_name="Andrei G"))
+    with patch(
+        "app.services.reminder_service._generate_empty_day_message",
+        new=AsyncMock(return_value="."),
+    ):
+        await send_daily_digest_to_user(
+            mock_bot, user_id=1, tz_name=TZ_NAME, last_sent=None, full_name=None
+        )
+    mock_bot.get_chat.assert_awaited_once_with(1)
+    body = mock_bot.send_message.await_args.args[1]
+    assert "<b>Andrei G</b>" in body
+
+
+@pytest.mark.asyncio
+async def test_full_name_fallback_tolerates_get_chat_failure(deps, mock_bot):
+    """If bot.get_chat raises, digest still goes out — just without a name."""
+    deps.settings.daily_digest_hour = 0
+    deps.cal.list_events = AsyncMock(return_value=[])
+    mock_bot.get_chat = AsyncMock(side_effect=RuntimeError("blocked"))
+    with patch(
+        "app.services.reminder_service._generate_empty_day_message",
+        new=AsyncMock(return_value="Свободно!"),
+    ):
+        await send_daily_digest_to_user(
+            mock_bot, user_id=1, tz_name=TZ_NAME, last_sent=None, full_name=None
+        )
+    mock_bot.send_message.assert_awaited_once()
+    body = mock_bot.send_message.await_args.args[1]
+    assert "Свободно!" in body
+
+
+@pytest.mark.asyncio
 async def test_no_send_when_credentials_missing(deps, mock_bot):
     deps.settings.daily_digest_hour = 0
     deps.auth.get_credentials = AsyncMock(return_value=None)

@@ -24,11 +24,21 @@ logger = logging.getLogger(__name__)
 
 _EMPTY_DAY_FALLBACK = "📅 <b>На сегодня ничего не запланировано.</b>"
 _EMPTY_DAY_PROMPT = (
-    "Напиши одно короткое, жизнерадостное сообщение на русском для Telegram-бота "
-    "о том, что у пользователя на сегодня нет дел в календаре. Стиль: тёплый, "
-    "дружелюбный, чуть ироничный. 1-2 эмодзи, до 15 слов. Без кавычек, без "
-    "markdown, без префиксов. Каждый раз формулируй по-разному, чтобы не "
-    "повторяться. Пример: Как тебе повезло! Сегодня нет запланированных дел! Ура! 🎉"
+    "Ты пишешь одно короткое сообщение по-русски для Telegram-бота: "
+    "у пользователя сегодня нет событий в календаре.\n"
+    "Требования:\n"
+    "— Грамотный, естественный русский язык, как в живой речи.\n"
+    "— 5–15 слов, 1–2 эмодзи, одна-две строки.\n"
+    "— Стиль: тёплый, дружелюбный, ободряющий или с лёгкой иронией.\n"
+    "— Без кавычек, без markdown, без префиксов вроде «Ответ:».\n"
+    "— Каждый раз формулируй по-новому, без повторов.\n"
+    "Хорошие примеры:\n"
+    "«Сегодня календарь пуст — отличный повод отдохнуть 🌿»\n"
+    "«Свободный день! Как тебе повезло 😄»\n"
+    "«На сегодня никаких дел. Время для себя ✨»\n"
+    "Плохо (так не делай): неестественные конструкции, канцеляризмы, "
+    "жаргон, нарочито искусственные фразы типа «покори день налегке» "
+    "или «календарь смело пуст»."
 )
 
 
@@ -49,7 +59,7 @@ async def _generate_empty_day_message() -> str:
                     {"role": "system", "content": _EMPTY_DAY_PROMPT},
                     {"role": "user", "content": "Придумай одну такую фразу."},
                 ],
-                temperature=1.3,
+                temperature=0.9,
                 max_tokens=80,
             ),
             timeout=10.0,
@@ -126,6 +136,26 @@ async def _remind_user(bot: Bot, user_id: int, tz_name: str) -> bool:
     return True
 
 
+async def _fetch_and_persist_full_name(bot: Bot, user_id: int) -> str | None:
+    """Ask Telegram for the user's display name and cache it in the DB.
+
+    Used when ``User.full_name`` is NULL — e.g. for users whose row predates
+    UserSyncMiddleware and who haven't sent a message since the middleware
+    was deployed. Returns the fetched name, or None on failure.
+    """
+    try:
+        chat = await bot.get_chat(user_id)
+    except Exception:
+        logger.warning("bot.get_chat failed for user %d", user_id, exc_info=True)
+        return None
+    fetched = getattr(chat, "full_name", None)
+    if not fetched:
+        return None
+    async with get_session() as session:
+        await session.execute(update(User).where(User.id == user_id).values(full_name=fetched))
+    return fetched
+
+
 def _greeting(full_name: str | None, hour: int) -> str:
     """Time-of-day greeting in user's local hour, prefixed to the digest."""
     if 5 <= hour < 12:
@@ -198,6 +228,8 @@ async def send_daily_digest_to_user(
         logger.exception("Failed to fetch events for daily digest, user %d", user_id)
         return False
 
+    if not full_name:
+        full_name = await _fetch_and_persist_full_name(bot, user_id)
     greeting = _greeting(full_name, now.hour)
 
     if events:
