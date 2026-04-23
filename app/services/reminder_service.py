@@ -4,11 +4,13 @@ Queries all authenticated users, fetches their upcoming events (next 24 h),
 and sends a Telegram message for each user that has at least one event.
 """
 
+import asyncio
 import logging
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot
+from openai import AsyncOpenAI
 from sqlalchemy import select, update
 
 from app.core.config import settings
@@ -18,6 +20,44 @@ from app.services.auth_service import auth_service
 from app.services.calendar_service import calendar_service
 
 logger = logging.getLogger(__name__)
+
+_EMPTY_DAY_FALLBACK = "📅 <b>На сегодня ничего не запланировано.</b>"
+_EMPTY_DAY_PROMPT = (
+    "Напиши одно короткое, жизнерадостное сообщение на русском для Telegram-бота "
+    "о том, что у пользователя на сегодня нет дел в календаре. Стиль: тёплый, "
+    "дружелюбный, чуть ироничный. 1-2 эмодзи, до 15 слов. Без кавычек, без "
+    "markdown, без префиксов. Каждый раз формулируй по-разному, чтобы не "
+    "повторяться. Пример: Как тебе повезло! Сегодня нет запланированных дел! Ура! 🎉"
+)
+
+
+async def _generate_empty_day_message() -> str:
+    """Ask the LLM for a fresh one-line 'no events today' phrase.
+
+    Falls back to a static message if OpenAI is unreachable, unconfigured,
+    or times out. Never raises — daily digest must keep going.
+    """
+    if not settings.openai_api_key:
+        return _EMPTY_DAY_FALLBACK
+    try:
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        response = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=settings.openai_model,
+                messages=[
+                    {"role": "system", "content": _EMPTY_DAY_PROMPT},
+                    {"role": "user", "content": "Придумай одну такую фразу."},
+                ],
+                temperature=1.3,
+                max_tokens=80,
+            ),
+            timeout=10.0,
+        )
+        text = (response.choices[0].message.content or "").strip()
+        return text or _EMPTY_DAY_FALLBACK
+    except Exception:
+        logger.warning("LLM empty-day message failed, using fallback", exc_info=True)
+        return _EMPTY_DAY_FALLBACK
 
 
 async def send_reminders(bot: Bot) -> int:
@@ -155,7 +195,7 @@ async def send_daily_digest_to_user(
             lines.append(line)
         text = "\n".join(lines)
     else:
-        text = "📅 <b>На сегодня ничего не запланировано.</b>"
+        text = await _generate_empty_day_message()
 
     await bot.send_message(user_id, text, parse_mode="HTML")
 

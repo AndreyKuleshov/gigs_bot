@@ -73,12 +73,35 @@ async def test_sends_when_gate_open_and_not_sent(deps, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_empty_events_sends_fallback_message(deps, mock_bot):
+async def test_empty_events_sends_llm_generated_message(deps, mock_bot):
     deps.settings.daily_digest_hour = 0
     deps.cal.list_events = AsyncMock(return_value=[])
-    await send_daily_digest_to_user(mock_bot, user_id=1, tz_name=TZ_NAME, last_sent=None)
-    args, kwargs = mock_bot.send_message.await_args
-    body = args[1] if len(args) > 1 else kwargs.get("text", "")
+    with patch(
+        "app.services.reminder_service._generate_empty_day_message",
+        new=AsyncMock(return_value="Ура, сегодня свободный день! 🎉"),
+    ) as llm:
+        await send_daily_digest_to_user(mock_bot, user_id=1, tz_name=TZ_NAME, last_sent=None)
+    llm.assert_awaited_once()
+    args, _ = mock_bot.send_message.await_args
+    body = args[1]
+    assert body == "Ура, сегодня свободный день! 🎉"
+
+
+@pytest.mark.asyncio
+async def test_empty_events_uses_static_fallback_when_llm_fails(deps, mock_bot):
+    """If the LLM helper returns the static fallback (e.g. API down / no key),
+    the bot still sends something sensible."""
+    deps.settings.daily_digest_hour = 0
+    deps.cal.list_events = AsyncMock(return_value=[])
+    from app.services.reminder_service import _EMPTY_DAY_FALLBACK
+
+    with patch(
+        "app.services.reminder_service._generate_empty_day_message",
+        new=AsyncMock(return_value=_EMPTY_DAY_FALLBACK),
+    ):
+        await send_daily_digest_to_user(mock_bot, user_id=1, tz_name=TZ_NAME, last_sent=None)
+    args, _ = mock_bot.send_message.await_args
+    body = args[1]
     assert "ничего не запланировано" in body.lower()
 
 
