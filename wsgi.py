@@ -32,43 +32,12 @@ _dp = create_dispatcher()  # shared; stateless except MemoryStorage (asyncio-saf
 
 
 # ── Background schedulers ──────────────────────────────────────────────────────
-# FastAPI lifespan tasks in app/api/app.py do NOT run under WSGI, so we host the
-# schedulers in a daemon thread with its own event loop. Requires the webapp to
-# stay alive (PythonAnywhere free webapps idle-sleep after ~30 min with no
-# traffic — keep alive with an external /health pinger).
-def _run_background_schedulers() -> None:
-    async def _main() -> None:
-        from app.bot.scheduler import start_daily_digest_scheduler, start_scheduler
-
-        bot = create_bot()
-        tasks = []
-        if settings.daily_digest_enabled:
-            tasks.append(asyncio.create_task(start_daily_digest_scheduler(bot)))
-        if settings.reminder_cron:
-            tasks.append(asyncio.create_task(start_scheduler(bot)))
-        try:
-            if tasks:
-                await asyncio.gather(*tasks)
-        finally:
-            await bot.session.close()
-
-    try:
-        asyncio.run(_main())
-    except Exception:
-        logger.exception("Background scheduler thread crashed")
-
-
-if settings.daily_digest_enabled or settings.reminder_cron:
-    threading.Thread(
-        target=_run_background_schedulers,
-        name="schedulers",
-        daemon=True,
-    ).start()
-    logger.info(
-        "Background scheduler thread started (digest=%s, reminder_cron=%r)",
-        settings.daily_digest_enabled,
-        settings.reminder_cron or "",
-    )
+# NOTE: under PythonAnywhere's single-worker uWSGI, a long-lived daemon thread
+# running its own asyncio loop starves the request worker — /health and
+# /webhook/telegram end up timing out. So we do NOT host schedulers in-process
+# on WSGI. Instead, expose HTTP tick endpoints below that an external cron
+# (e.g. cron-job.org) pings on a schedule. The idempotency guard
+# (User.last_daily_sent_date) makes the HTTP path safe to call often.
 
 
 # ── Async helpers ──────────────────────────────────────────────────────────────
@@ -184,6 +153,37 @@ def application(environ, start_response):  # type: ignore[no-untyped-def]
 
         threading.Thread(target=process, daemon=True).start()
         return respond("200 OK", b'{"ok":true}')
+
+    # ── External-cron scheduler ticks ──────────────────────────────────────────
+    # Dedicated endpoints for an external cron (e.g. cron-job.org) to hit on a
+    # schedule. Require WEBHOOK_SECRET in X-Webhook-Secret so they are not
+    # public. Idempotent: digest is guarded by User.last_daily_sent_date.
+    if method == "POST" and path in ("/internal/tick-digest", "/internal/tick-reminders"):
+        secret = environ.get("HTTP_X_WEBHOOK_SECRET", "")
+        if not settings.webhook_secret or secret != settings.webhook_secret:
+            return respond("403 Forbidden", b'{"error":"forbidden"}')
+
+        async def _tick() -> int:
+            if path == "/internal/tick-digest":
+                from app.services.reminder_service import tick_daily_digests
+
+                fn = tick_daily_digests
+            else:
+                from app.services.reminder_service import send_reminders
+
+                fn = send_reminders
+            bot = create_bot()
+            try:
+                return await fn(bot)
+            finally:
+                await bot.session.close()
+
+        try:
+            sent = asyncio.run(_tick())
+            return respond("200 OK", json.dumps({"sent": sent}).encode())
+        except Exception as exc:
+            logger.exception("Internal tick failed")
+            return respond("500 Internal Server Error", json.dumps({"error": str(exc)}).encode())
 
     # ── Google OAuth start ─────────────────────────────────────────────────────
     if method == "GET" and path == "/auth/google":
