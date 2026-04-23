@@ -17,6 +17,13 @@ The bot supports two interaction modes:
 - Timezone selection — pick from popular timezones or enter a custom IANA zone
 - Google OAuth2 with PKCE — connect your Google account directly from Telegram
 - Scheduled event reminders via configurable cron expression
+- Daily morning digest — a personalised greeting + today's events (or an
+  LLM-generated upbeat "no events" phrase), delivered at the user's local
+  `DAILY_DIGEST_HOUR` via a ~60s pulse loop
+- AI-powered event discovery — ask "куда сходить на выходных?" / "any
+  stand-up this weekend?" and the agent searches the web for concerts,
+  parties, festivals, exhibitions etc. in the user's city, returns 3-5
+  options with ticket links, and offers to add picks to the calendar
 - AI-powered web search (DuckDuckGo) and image search for event details
 - Token encryption at rest using Fernet symmetric encryption
 - Proxy support for restricted environments (e.g. PythonAnywhere)
@@ -172,13 +179,19 @@ User sends free-text message
    - Detected language (Russian or English, based on character analysis)
    - Strict formatting rules (Telegram HTML only)
    - Tool usage instructions
-4. OpenAI receives the message with 6 tool definitions:
+4. OpenAI receives the message with 7 tool definitions:
    - `read_events` — list calendar events with time/query filters
    - `create_event` — create a new event
    - `update_event` — modify an existing event (requires event ID from read_events)
    - `delete_event` — remove an event (requires event ID from read_events)
+   - `get_date_range` — resolve relative periods (this_weekend, next_week, …) into ISO bounds in the user's tz
    - `web_search` — DuckDuckGo text search (English queries for best coverage)
    - `find_event_image` — DuckDuckGo image search
+
+   Supported query flavours include:
+   - Calendar CRUD: "create an event tomorrow at 3pm called Meeting"
+   - Info lookup on an existing event: "найди информацию про концерт Skillet" → read_events → web_search with the calendar date → update_event to persist venue/tickets
+   - **Event discovery**: "куда сходить на выходных?", "any stand-up this weekend?" → get_date_range → web_search using the user's city (derived from their IANA timezone) → 3-5 options with ticket links → user picks → create_event on confirm
 5. The model may call multiple tools across up to 8 rounds
 6. **Confirmation gate**: mutating tools (create/update/delete) are intercepted — the action is stored in FSM state, and the user sees a confirm/cancel keyboard
 7. On confirmation: `execute_confirmed_action()` runs the calendar tool directly
@@ -313,6 +326,9 @@ Edit `.env` and fill in all values:
 | `WEBHOOK_SECRET` | No | Validates incoming webhook requests |
 | `PROXY_URL` | No | HTTP proxy for restricted networks |
 | `REMINDER_CRON` | No | Cron expression for reminders (e.g. `0 9 * * *`) |
+| `DAILY_DIGEST_ENABLED` | No | Default: `false`. Set to `true` to turn on the morning digest |
+| `DAILY_DIGEST_HOUR` | No | Default: `9`. Local hour (per-user tz) at which the digest is sent |
+| `DAILY_DIGEST_POLL_SECONDS` | No | Default: `60`. Pulse interval for the digest scheduler |
 | `API_HOST` | No | Default: `0.0.0.0` |
 | `API_PORT` | No | Default: `8000` |
 | `DEBUG` | No | Default: `false` |
