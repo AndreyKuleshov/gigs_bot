@@ -31,6 +31,46 @@ asyncio.run(create_tables())
 _dp = create_dispatcher()  # shared; stateless except MemoryStorage (asyncio-safe)
 
 
+# ── Background schedulers ──────────────────────────────────────────────────────
+# FastAPI lifespan tasks in app/api/app.py do NOT run under WSGI, so we host the
+# schedulers in a daemon thread with its own event loop. Requires the webapp to
+# stay alive (PythonAnywhere free webapps idle-sleep after ~30 min with no
+# traffic — keep alive with an external /health pinger).
+def _run_background_schedulers() -> None:
+    async def _main() -> None:
+        from app.bot.scheduler import start_daily_digest_scheduler, start_scheduler
+
+        bot = create_bot()
+        tasks = []
+        if settings.daily_digest_enabled:
+            tasks.append(asyncio.create_task(start_daily_digest_scheduler(bot)))
+        if settings.reminder_cron:
+            tasks.append(asyncio.create_task(start_scheduler(bot)))
+        try:
+            if tasks:
+                await asyncio.gather(*tasks)
+        finally:
+            await bot.session.close()
+
+    try:
+        asyncio.run(_main())
+    except Exception:
+        logger.exception("Background scheduler thread crashed")
+
+
+if settings.daily_digest_enabled or settings.reminder_cron:
+    threading.Thread(
+        target=_run_background_schedulers,
+        name="schedulers",
+        daemon=True,
+    ).start()
+    logger.info(
+        "Background scheduler thread started (digest=%s, reminder_cron=%r)",
+        settings.daily_digest_enabled,
+        settings.reminder_cron or "",
+    )
+
+
 # ── Async helpers ──────────────────────────────────────────────────────────────
 async def _feed_update(body: bytes) -> None:
     """Parse and dispatch one Telegram update, then close the bot session."""
