@@ -8,7 +8,7 @@ from aiogram import Bot
 from croniter import croniter
 
 from app.core.config import settings
-from app.services.reminder_service import send_reminders
+from app.services.reminder_service import send_reminders, tick_daily_digests
 
 logger = logging.getLogger(__name__)
 
@@ -39,3 +39,25 @@ async def start_scheduler(bot: Bot) -> None:
             logger.info("Reminders sent to %d user(s)", sent)
         except Exception:
             logger.exception("Scheduled reminder failed")
+
+
+async def start_daily_digest_scheduler(bot: Bot) -> None:
+    """Per-minute pulse: send each user their daily digest at DAILY_DIGEST_HOUR
+    in their own timezone. Idempotent via ``User.last_daily_sent_date``.
+
+    Blocks forever; meant to be launched as a background task.
+    """
+    interval = settings.daily_digest_poll_seconds
+    logger.info(
+        "Daily digest scheduler started (hour=%d local, poll=%ds)",
+        settings.daily_digest_hour,
+        interval,
+    )
+    while True:
+        try:
+            sent = await tick_daily_digests(bot)
+            if sent:
+                logger.info("Daily digest sent to %d user(s)", sent)
+        except Exception:
+            logger.exception("Daily digest tick failed")
+        await asyncio.sleep(interval)

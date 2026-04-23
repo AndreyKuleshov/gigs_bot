@@ -1,8 +1,8 @@
 """SQLAlchemy ORM models."""
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import BigInteger, DateTime, String, Text
+from sqlalchemy import BigInteger, Date, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -31,6 +31,10 @@ class User(Base):
     selected_calendar_name: Mapped[str | None] = mapped_column(
         String(255), default=None, nullable=True
     )
+
+    # Last date (in user's local tz) the daily morning digest was sent.
+    # Guards against double-sending from the ~60s scheduler tick.
+    last_daily_sent_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -464,7 +464,8 @@ Runs in long-polling mode (no webhook needed). Bot pulls updates from Telegram A
    cd ~/gigs_bot && bash deploy.sh
    ```
 5. Reload the web app from the PythonAnywhere dashboard
-6. For reminders: add a Scheduled Task running `run_reminders.py`
+6. Reminders and the daily morning digest run in-process (no cron task needed).
+   Enable them via `REMINDER_CRON` and `DAILY_DIGEST_ENABLED` env vars.
 
 ### Docker / Fly.io / Render
 

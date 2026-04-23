@@ -43,10 +43,21 @@ def _make_lifespan(preloaded_bot: Any = None, preloaded_dp: Any = None):
 
             app.state.scheduler_task = asyncio.create_task(start_scheduler(bot))
 
+        # Daily morning digest scheduler (per-user local 9 AM, ~60s pulse loop).
+        # PA free tier has no cron; this runs inside the webapp process.
+        if settings.daily_digest_enabled:
+            import asyncio
+
+            from app.bot.scheduler import start_daily_digest_scheduler
+
+            app.state.daily_digest_task = asyncio.create_task(start_daily_digest_scheduler(bot))
+
         yield
 
         if hasattr(app.state, "scheduler_task"):
             app.state.scheduler_task.cancel()
+        if hasattr(app.state, "daily_digest_task"):
+            app.state.daily_digest_task.cancel()
         if not settings.webhook_url:
             app.state.polling_task.cancel()
 

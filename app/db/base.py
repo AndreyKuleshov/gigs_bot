@@ -89,6 +89,8 @@ def _add_missing_columns(conn) -> None:
         )
     if "selected_calendar_name" not in existing:
         conn.execute(text("ALTER TABLE users ADD COLUMN selected_calendar_name VARCHAR(255)"))
+    if "last_daily_sent_date" not in existing:
+        conn.execute(text("ALTER TABLE users ADD COLUMN last_daily_sent_date DATE"))
     # Migrate old default "primary" → empty so users must explicitly select
     # Only run once: skip if selected_calendar_name column already existed
     if "selected_calendar_name" not in existing and "selected_calendar_id" in existing:

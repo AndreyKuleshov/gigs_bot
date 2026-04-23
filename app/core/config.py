@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     # Leave empty to disable. For testing: "* * * * *" (every minute)
     reminder_cron: str = ""
 
+    # Morning digest: every day at DAILY_DIGEST_HOUR local time (per user tz)
+    # the bot sends each authenticated user their events for today.
+    # Implemented as a ~60s pulse loop (PA free tier has no cron).
+    daily_digest_enabled: bool = False
+    daily_digest_hour: int = 9
+    daily_digest_poll_seconds: int = 60
+
     # FastAPI
     api_host: str = "0.0.0.0"
     api_port: int = 8000
