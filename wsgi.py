@@ -157,8 +157,9 @@ def application(environ, start_response):  # type: ignore[no-untyped-def]
     # ── External-cron scheduler ticks ──────────────────────────────────────────
     # Dedicated endpoints for an external cron (e.g. cron-job.org) to hit on a
     # schedule. Require WEBHOOK_SECRET in X-Webhook-Secret so they are not
-    # public. Idempotent: digest is guarded by User.last_daily_sent_date.
-    if method == "POST" and path in ("/internal/tick-digest", "/internal/tick-reminders"):
+    # public. Accept GET and POST — cron-job.org's free plan only allows GET.
+    # Idempotent: digest is guarded by User.last_daily_sent_date.
+    if path in ("/internal/tick-digest", "/internal/tick-reminders"):
         secret = environ.get("HTTP_X_WEBHOOK_SECRET", "")
         if not settings.webhook_secret or secret != settings.webhook_secret:
             return respond("403 Forbidden", b'{"error":"forbidden"}')
