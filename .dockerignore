@@ -1,0 +1,47 @@
+# VCS
+.git
+.gitignore
+
+# Python build artifacts
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+
+# Virtual environments
+.venv
+venv
+
+# Local DB / dev state
+gigs_bot.db
+*.sqlite
+*.sqlite3
+
+# Secrets / env (never bake into images)
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+
+# Tests / docs (not needed at runtime)
+tests
+README.MD
+MIGRATION_PLAN.md
+*.md
+
+# Docker meta (already on context)
+Dockerfile
+.dockerignore
+
+# Misc
+*.log
+.claude
