@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot
+from google.auth.exceptions import RefreshError
 from openai import AsyncOpenAI
 from sqlalchemy import select, update
 
@@ -40,6 +41,20 @@ _EMPTY_DAY_PROMPT = (
     "жаргон, нарочито искусственные фразы типа «покори день налегке» "
     "или «календарь смело пуст»."
 )
+
+
+def _is_auth_failure(exc: Exception) -> bool:
+    """True when *exc* indicates the user's Google token is no longer valid.
+
+    Mirrors the same check in app/bot/handlers/button_mode.py — kept duplicated
+    to avoid an import cycle (services should not depend on bot/handlers).
+    """
+    if isinstance(exc, RefreshError):
+        return True
+    if isinstance(exc, RuntimeError):
+        text = str(exc)
+        return "401" in text or "403" in text
+    return False
 
 
 async def _generate_empty_day_message() -> str:
@@ -228,8 +243,25 @@ async def send_daily_digest_to_user(
             time_min=day_start,
             time_max=day_end,
         )
-    except Exception:
-        logger.exception("Failed to fetch events for daily digest, user %d", user_id)
+    except Exception as exc:
+        if _is_auth_failure(exc):
+            # Token revoked — stop scheduling digests for this user. Their
+            # row will be re-eligible only after they reconnect via /auth.
+            logger.info(
+                "Daily digest: revoking tokens for user %d (Google rejected refresh)",
+                user_id,
+            )
+            try:
+                await auth_service.revoke_tokens(user_id)
+            except Exception:
+                logger.warning("Failed to revoke stale tokens for user %d", user_id)
+            return False
+        logger.warning(
+            "Daily digest: list_events failed for user %d: %s: %s",
+            user_id,
+            type(exc).__name__,
+            exc,
+        )
         return False
 
     if not full_name:
