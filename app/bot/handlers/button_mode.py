@@ -1,12 +1,14 @@
 """Button mode: FSM-driven calendar CRUD via inline keyboards."""
 
+import logging
 from datetime import date as date_type
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from google.auth.exceptions import RefreshError
 
 from app.bot.handlers.common import _menu_kb
 from app.bot.keyboards import (
@@ -20,6 +22,8 @@ from app.bot.keyboards import (
 from app.bot.states import CreateEventFSM, DeleteEventFSM, SelectCalendarFSM, UpdateEventFSM
 from app.services.auth_service import auth_service
 from app.services.calendar_service import EventCreate, EventUpdate, calendar_service
+
+logger = logging.getLogger(__name__)
 
 router = Router(name="button_mode")
 
@@ -44,12 +48,65 @@ def _ctx(callback: CallbackQuery) -> tuple[int, Message] | None:
 # ── Auth & calendar guards ────────────────────────────────────────────────────
 
 
-async def _check_auth(callback: CallbackQuery) -> bool:
-    """Show an alert and return False when the user is not authenticated."""
+async def _handle_auth_failure(callback: CallbackQuery, state: FSMContext, msg: Message) -> None:
+    """Render a 'reconnect Google' prompt and reset FSM state.
+
+    Used whenever the user's Google session is missing, corrupt or rejected
+    (no tokens, decryption failed, RefreshError, 401/403). Clears any
+    in-flight FSM state so a partial create/update/delete flow doesn't get
+    stuck, then offers a clickable OAuth link.
+    """
+    await state.clear()
+    if callback.from_user is None:
+        await callback.answer()
+        return
+    user_id = callback.from_user.id
+    try:
+        if await auth_service.is_authenticated(user_id):
+            await auth_service.revoke_tokens(user_id)
+    except Exception:
+        logger.debug("revoke_tokens failed in auth-failure handler", exc_info=True)
+    try:
+        auth_url = await auth_service.get_auth_url(user_id)
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🔐 Connect Google Calendar", url=auth_url)],
+                [InlineKeyboardButton(text="🔙 Main menu", callback_data="main_menu")],
+            ]
+        )
+        await msg.edit_text(
+            "⚠️ Google authorization is missing or expired.\n\n"
+            "Connect your Google account to continue.",
+            reply_markup=kb,
+        )
+    except Exception:
+        logger.exception("Failed to render auth-failure prompt")
+        try:
+            await msg.edit_text("⚠️ Authorization required. Please run /auth to reconnect Google.")
+        except Exception:
+            logger.debug("auth-failure fallback edit_text failed", exc_info=True)
+    await callback.answer()
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    """True when *exc* indicates Google auth must be re-established."""
+    if isinstance(exc, RefreshError):
+        return True
+    if isinstance(exc, RuntimeError):
+        text = str(exc)
+        return "401" in text or "403" in text
+    return False
+
+
+async def _check_auth(callback: CallbackQuery, state: FSMContext) -> bool:
+    """Verify auth; if missing, render the reconnect prompt and return False."""
     if callback.from_user is None:
         return False
     if not await auth_service.is_authenticated(callback.from_user.id):
-        await callback.answer("⚠️ Connect your Google account first. Use /auth", show_alert=True)
+        if isinstance(callback.message, Message):
+            await _handle_auth_failure(callback, state, callback.message)
+        else:
+            await callback.answer("⚠️ Connect your Google account first. Use /auth", show_alert=True)
         return False
     return True
 
@@ -70,7 +127,7 @@ async def _check_calendar(callback: CallbackQuery) -> bool:
 
 @router.callback_query(F.data == "select_calendar")
 async def cb_select_calendar(callback: CallbackQuery, state: FSMContext) -> None:
-    if not await _check_auth(callback):
+    if not await _check_auth(callback, state):
         return
     ctx = _ctx(callback)
     if ctx is None:
@@ -79,14 +136,19 @@ async def cb_select_calendar(callback: CallbackQuery, state: FSMContext) -> None
 
     creds = await auth_service.get_credentials(user_id)
     if creds is None:
-        await callback.answer("Authentication error", show_alert=True)
+        await _handle_auth_failure(callback, state, msg)
         return
 
     try:
         calendars = await calendar_service.list_calendars(creds)
-    except RuntimeError as exc:
-        await callback.answer(str(exc), show_alert=True)
-        return
+    except Exception as exc:
+        if _is_auth_error(exc):
+            await _handle_auth_failure(callback, state, msg)
+            return
+        if isinstance(exc, RuntimeError):
+            await callback.answer(str(exc), show_alert=True)
+            return
+        raise
 
     # Store calendar list in FSM so the pick handler can resolve index → id
     await state.set_state(SelectCalendarFSM.selecting)
@@ -130,8 +192,8 @@ async def fsm_cal_pick(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data == "list_events")
-async def cb_list_events(callback: CallbackQuery) -> None:
-    if not await _check_auth(callback) or not await _check_calendar(callback):
+async def cb_list_events(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await _check_auth(callback, state) or not await _check_calendar(callback):
         return
     ctx = _ctx(callback)
     if ctx is None:
@@ -140,16 +202,21 @@ async def cb_list_events(callback: CallbackQuery) -> None:
 
     creds = await auth_service.get_credentials(user_id)
     if creds is None:
-        await callback.answer("Authentication error", show_alert=True)
+        await _handle_auth_failure(callback, state, msg)
         return
 
     calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
 
     try:
         events = await calendar_service.list_events(creds, calendar_id=calendar_id, max_results=10)
-    except RuntimeError as exc:
-        await callback.answer(str(exc), show_alert=True)
-        return
+    except Exception as exc:
+        if _is_auth_error(exc):
+            await _handle_auth_failure(callback, state, msg)
+            return
+        if isinstance(exc, RuntimeError):
+            await callback.answer(str(exc), show_alert=True)
+            return
+        raise
 
     if not events:
         await msg.edit_text("📭 No upcoming events.", reply_markup=back_kb())
@@ -172,7 +239,7 @@ async def cb_list_events(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "create_event")
 async def cb_create_start(callback: CallbackQuery, state: FSMContext) -> None:
-    if not await _check_auth(callback) or not await _check_calendar(callback):
+    if not await _check_auth(callback, state) or not await _check_calendar(callback):
         return
     ctx = _ctx(callback)
     if ctx is None:
@@ -336,8 +403,7 @@ async def fsm_create_confirm(callback: CallbackQuery, state: FSMContext) -> None
 
     creds = await auth_service.get_credentials(user_id)
     if creds is None:
-        await callback.answer("Authentication error", show_alert=True)
-        await state.clear()
+        await _handle_auth_failure(callback, state, msg)
         return
 
     calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
@@ -362,10 +428,16 @@ async def fsm_create_confirm(callback: CallbackQuery, state: FSMContext) -> None
             f"✅ Event created!\n<b>{created.summary}</b>\n{created.html_link or ''}",
             parse_mode="HTML",
         )
-    except RuntimeError as exc:
-        await msg.edit_text(f"❌ Error: {exc}")
-    finally:
         await state.clear()
+    except Exception as exc:
+        if _is_auth_error(exc):
+            await _handle_auth_failure(callback, state, msg)
+            return
+        await state.clear()
+        if isinstance(exc, RuntimeError):
+            await msg.edit_text(f"❌ Error: {exc}")
+        else:
+            raise
     await callback.answer()
 
 
@@ -374,7 +446,7 @@ async def fsm_create_confirm(callback: CallbackQuery, state: FSMContext) -> None
 
 @router.callback_query(F.data == "delete_event")
 async def cb_delete_start(callback: CallbackQuery, state: FSMContext) -> None:
-    if not await _check_auth(callback) or not await _check_calendar(callback):
+    if not await _check_auth(callback, state) or not await _check_calendar(callback):
         return
     ctx = _ctx(callback)
     if ctx is None:
@@ -383,16 +455,21 @@ async def cb_delete_start(callback: CallbackQuery, state: FSMContext) -> None:
 
     creds = await auth_service.get_credentials(user_id)
     if creds is None:
-        await callback.answer("Authentication error", show_alert=True)
+        await _handle_auth_failure(callback, state, msg)
         return
 
     calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
 
     try:
         events = await calendar_service.list_events(creds, calendar_id=calendar_id, max_results=10)
-    except RuntimeError as exc:
-        await callback.answer(str(exc), show_alert=True)
-        return
+    except Exception as exc:
+        if _is_auth_error(exc):
+            await _handle_auth_failure(callback, state, msg)
+            return
+        if isinstance(exc, RuntimeError):
+            await callback.answer(str(exc), show_alert=True)
+            return
+        raise
 
     if not events:
         await msg.edit_text("📭 No events to delete.", reply_markup=back_kb())
@@ -438,8 +515,7 @@ async def fsm_delete_confirm(callback: CallbackQuery, state: FSMContext) -> None
 
     creds = await auth_service.get_credentials(user_id)
     if creds is None:
-        await callback.answer("Authentication error", show_alert=True)
-        await state.clear()
+        await _handle_auth_failure(callback, state, msg)
         return
 
     calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
@@ -447,10 +523,16 @@ async def fsm_delete_confirm(callback: CallbackQuery, state: FSMContext) -> None
     try:
         await calendar_service.delete_event(creds, data["event_id"], calendar_id=calendar_id)
         await msg.edit_text("✅ Event deleted.")
-    except RuntimeError as exc:
-        await msg.edit_text(f"❌ Error: {exc}")
-    finally:
         await state.clear()
+    except Exception as exc:
+        if _is_auth_error(exc):
+            await _handle_auth_failure(callback, state, msg)
+            return
+        await state.clear()
+        if isinstance(exc, RuntimeError):
+            await msg.edit_text(f"❌ Error: {exc}")
+        else:
+            raise
     await callback.answer()
 
 
@@ -459,7 +541,7 @@ async def fsm_delete_confirm(callback: CallbackQuery, state: FSMContext) -> None
 
 @router.callback_query(F.data == "update_event")
 async def cb_update_start(callback: CallbackQuery, state: FSMContext) -> None:
-    if not await _check_auth(callback) or not await _check_calendar(callback):
+    if not await _check_auth(callback, state) or not await _check_calendar(callback):
         return
     ctx = _ctx(callback)
     if ctx is None:
@@ -468,16 +550,21 @@ async def cb_update_start(callback: CallbackQuery, state: FSMContext) -> None:
 
     creds = await auth_service.get_credentials(user_id)
     if creds is None:
-        await callback.answer("Authentication error", show_alert=True)
+        await _handle_auth_failure(callback, state, msg)
         return
 
     calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
 
     try:
         events = await calendar_service.list_events(creds, calendar_id=calendar_id, max_results=10)
-    except RuntimeError as exc:
-        await callback.answer(str(exc), show_alert=True)
-        return
+    except Exception as exc:
+        if _is_auth_error(exc):
+            await _handle_auth_failure(callback, state, msg)
+            return
+        if isinstance(exc, RuntimeError):
+            await callback.answer(str(exc), show_alert=True)
+            return
+        raise
 
     if not events:
         await msg.edit_text("📭 No events to update.", reply_markup=back_kb())
@@ -571,8 +658,7 @@ async def fsm_update_confirm(callback: CallbackQuery, state: FSMContext) -> None
 
     creds = await auth_service.get_credentials(user_id)
     if creds is None:
-        await callback.answer("Authentication error", show_alert=True)
-        await state.clear()
+        await _handle_auth_failure(callback, state, msg)
         return
 
     calendar_id = await auth_service.get_calendar_id(user_id) or "primary"
@@ -589,8 +675,14 @@ async def fsm_update_confirm(callback: CallbackQuery, state: FSMContext) -> None
             creds, EventUpdate(**kwargs), calendar_id=calendar_id
         )
         await msg.edit_text(f"✅ Updated: <b>{updated.summary}</b>", parse_mode="HTML")
-    except RuntimeError as exc:
-        await msg.edit_text(f"❌ Error: {exc}")
-    finally:
         await state.clear()
+    except Exception as exc:
+        if _is_auth_error(exc):
+            await _handle_auth_failure(callback, state, msg)
+            return
+        await state.clear()
+        if isinstance(exc, RuntimeError):
+            await msg.edit_text(f"❌ Error: {exc}")
+        else:
+            raise
     await callback.answer()
