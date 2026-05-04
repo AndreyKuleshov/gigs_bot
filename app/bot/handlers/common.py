@@ -59,7 +59,11 @@ async def cmd_menu(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
         return
     await state.clear()
-    await message.answer("📋 Main menu:", reply_markup=await _menu_kb(message.from_user.id))
+    # Re-pin the persistent reply keyboard in case the user dismissed it
+    # — the second answer below carries an inline keyboard, which can't
+    # also attach a reply keyboard, so we send a dedicated message first.
+    await message.answer("📋", reply_markup=menu_reply_kb())
+    await message.answer("Main menu:", reply_markup=await _menu_kb(message.from_user.id))
 
 
 @router.message(F.text == "📋 Menu")
