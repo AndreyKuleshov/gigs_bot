@@ -202,7 +202,14 @@ async def ai_confirm_callback(callback: CallbackQuery, state: FSMContext) -> Non
         text = f"{prefix} {result}"
     except Exception as exc:
         text = f"❌ Ошибка: {exc}"
-    ai_agent.note_assistant(user_id, f"[Confirmed action {pending_tool}: {text}]")
+    # Phrase the history note as natural assistant text so the model treats
+    # it as a fact, not an inert tag — was missing this signal before, which
+    # caused the model to re-propose the same create_event a few turns later.
+    ai_agent.note_assistant(
+        user_id,
+        f"✅ Action complete ({pending_tool}). This change has already been applied "
+        f"and persisted in Google Calendar. Do not repeat it. Result: {text}",
+    )
     try:
         if busy:
             await busy.edit_text(text, parse_mode="HTML")
