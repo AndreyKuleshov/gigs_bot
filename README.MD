@@ -19,7 +19,7 @@ The bot supports two interaction modes:
 - Scheduled event reminders via configurable cron expression
 - Daily morning digest — a personalised greeting + today's events (or an
   LLM-generated upbeat "no events" phrase), delivered at the user's local
-  `DAILY_DIGEST_HOUR` via a ~60s pulse loop
+  `DAILY_DIGEST_HOUR`, scheduled by `DAILY_DIGEST_CRON` (default every 15 min)
 - AI-powered event discovery — ask "куда сходить на выходных?" / "any
   stand-up this weekend?" and the agent searches the web for concerts,
   parties, festivals, exhibitions etc. in the user's city, returns 3-5
@@ -327,7 +327,7 @@ Edit `.env` and fill in all values:
 | `REMINDER_CRON` | No | Cron expression for reminders (e.g. `0 9 * * *`) |
 | `DAILY_DIGEST_ENABLED` | No | Default: `false`. Set to `true` to turn on the morning digest |
 | `DAILY_DIGEST_HOUR` | No | Default: `9`. Local hour (per-user tz) at which the digest is sent |
-| `DAILY_DIGEST_POLL_SECONDS` | No | Default: `60`. Pulse interval for the digest scheduler |
+| `DAILY_DIGEST_CRON` | No | Default: `*/15 * * * *`. Cron for the digest tick — fires this often, sends to users whose local hour matches `DAILY_DIGEST_HOUR` and weren't sent today yet |
 | `API_HOST` | No | Default: `0.0.0.0` |
 | `API_PORT` | No | Default: `8000` |
 | `DEBUG` | No | Default: `false` |

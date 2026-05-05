@@ -42,25 +42,31 @@ async def start_scheduler(bot: Bot) -> None:
 
 
 async def start_daily_digest_scheduler(bot: Bot) -> None:
-    """Per-minute pulse: send each user their daily digest at DAILY_DIGEST_HOUR
-    in their own timezone. Idempotent via ``User.last_daily_sent_date``.
+    """Cron-driven daily digest tick. Per-user idempotency is guarded by
+    ``User.last_daily_sent_date``, so the cron can fire often without
+    double-sending.
 
-    Blocks forever; meant to be launched as a background task.
+    Blocks forever; meant to be launched as a background task. Returns
+    immediately if ``DAILY_DIGEST_CRON`` is empty.
     """
-    interval = settings.daily_digest_poll_seconds
+    cron_expr = settings.daily_digest_cron
+    if not cron_expr:
+        logger.info("DAILY_DIGEST_CRON not set — daily digest disabled")
+        return
     logger.info(
-        "Daily digest scheduler started (hour=%d local, poll=%ds)",
+        "Daily digest scheduler started (cron: %s, hour=%d local)",
+        cron_expr,
         settings.daily_digest_hour,
-        interval,
     )
+    cron = croniter(cron_expr, datetime.now(tz=UTC))
     while True:
+        next_run = cron.get_next(datetime)
+        delay = (next_run - datetime.now(tz=UTC)).total_seconds()
+        if delay > 0:
+            await asyncio.sleep(delay)
         try:
             sent = await tick_daily_digests(bot)
             if sent:
                 logger.info("Daily digest sent to %d user(s)", sent)
         except Exception as exc:
-            # Fallback to WARNING so a transient tick failure doesn't spam
-            # the PA error log every 60s. Includes the exception class and
-            # message; omit stack trace unless DEBUG is enabled.
             logger.warning("Daily digest tick failed: %s: %s", type(exc).__name__, exc)
-        await asyncio.sleep(interval)

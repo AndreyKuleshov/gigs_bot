@@ -44,10 +44,13 @@ class Settings(BaseSettings):
 
     # Morning digest: every day at DAILY_DIGEST_HOUR local time (per user tz)
     # the bot sends each authenticated user their events for today.
-    # Implemented as a ~60s pulse loop (PA free tier has no cron).
+    # The scheduler ticks on DAILY_DIGEST_CRON; on each tick it picks every
+    # user whose local hour == DAILY_DIGEST_HOUR and who hasn't been sent
+    # today yet. Default cron is every 15 minutes — fine for all IANA tzs
+    # (offsets are multiples of 15 min) without wasting cycles.
     daily_digest_enabled: bool = False
     daily_digest_hour: int = 9
-    daily_digest_poll_seconds: int = 60
+    daily_digest_cron: str = "*/15 * * * *"
 
     # Free-text debounce: when the user sends several messages in quick
     # succession, hold them for this many seconds, then merge into one
