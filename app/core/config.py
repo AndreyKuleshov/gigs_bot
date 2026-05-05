@@ -46,11 +46,13 @@ class Settings(BaseSettings):
     # the bot sends each authenticated user their events for today.
     # The scheduler ticks on DAILY_DIGEST_CRON; on each tick it picks every
     # user whose local hour == DAILY_DIGEST_HOUR and who hasn't been sent
-    # today yet. Default cron is every 15 minutes — fine for all IANA tzs
-    # (offsets are multiples of 15 min) without wasting cycles.
+    # today yet. Default cron is hourly — accurate for any tz whose UTC
+    # offset is a multiple of 60 min (RU, EU, US, etc.). For half-hour
+    # offsets (Asia/Kolkata, Iran, Australia/Adelaide, Newfoundland),
+    # tighten to "*/15 * * * *" or finer.
     daily_digest_enabled: bool = False
     daily_digest_hour: int = 9
-    daily_digest_cron: str = "*/15 * * * *"
+    daily_digest_cron: str = "0 * * * *"
 
     # Free-text debounce: when the user sends several messages in quick
     # succession, hold them for this many seconds, then merge into one
