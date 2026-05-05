@@ -55,11 +55,7 @@ class Settings(BaseSettings):
     # Free-text debounce: when the user sends several messages in quick
     # succession, hold them for this many seconds, then merge into one
     # request to the AI agent. Set to 0 to disable.
-    # Disabled by default: incompatible with the WSGI deploy (wsgi.py spins up
-    # a fresh event loop per webhook request via asyncio.run, which cancels
-    # the pending debounce task before it can flush). Only safe to enable
-    # under a persistent-loop deploy (uvicorn/long-polling).
-    text_debounce_seconds: float = 0.0
+    text_debounce_seconds: float = 3.0
 
     # FastAPI
     api_host: str = "0.0.0.0"
