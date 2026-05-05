@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     daily_digest_hour: int = 9
     daily_digest_poll_seconds: int = 60
 
+    # Free-text debounce: when the user sends several messages in quick
+    # succession, hold them for this many seconds, then merge into one
+    # request to the AI agent. Set to 0 to disable.
+    text_debounce_seconds: float = 3.0
+
     # FastAPI
     api_host: str = "0.0.0.0"
     api_port: int = 8000

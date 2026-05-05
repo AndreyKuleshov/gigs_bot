@@ -1,5 +1,6 @@
 """Free-text mode: route plain messages through the AI agent."""
 
+import asyncio
 import logging
 import re
 
@@ -17,6 +18,14 @@ router = Router(name="text_mode")
 logger = logging.getLogger(__name__)
 
 _MAX_CAPTION = 1024
+
+# Per-user debounce buffers for handle_free_text. When several messages
+# arrive within `settings.text_debounce_seconds`, we coalesce them into
+# one AI call so the user sees a single reply.
+_debounce_messages: dict[int, list[Message]] = {}
+_debounce_states: dict[int, FSMContext] = {}
+_debounce_tasks: dict[int, asyncio.Task] = {}
+_debounce_lock = asyncio.Lock()
 
 
 def _strip_html(text: str) -> str:
@@ -108,6 +117,44 @@ async def handle_free_text(message: Message, state: FSMContext) -> None:
     # New message cancels any pending AI confirmation
     await state.clear()
 
+    # If debounce is disabled, process this single message immediately.
+    if settings.text_debounce_seconds <= 0:
+        await _process_text(user_id, message, message.text, state)
+        return
+
+    # Otherwise: append to per-user buffer, restart the flush timer.
+    async with _debounce_lock:
+        _debounce_messages.setdefault(user_id, []).append(message)
+        _debounce_states[user_id] = state
+        old = _debounce_tasks.get(user_id)
+        if old is not None and not old.done():
+            old.cancel()
+        _debounce_tasks[user_id] = asyncio.create_task(_debounced_flush(user_id))
+
+
+async def _debounced_flush(user_id: int) -> None:
+    """Wait the debounce window, then run the AI on the merged buffer."""
+    try:
+        await asyncio.sleep(settings.text_debounce_seconds)
+    except asyncio.CancelledError:
+        return  # a newer message replaced this task
+    async with _debounce_lock:
+        messages = _debounce_messages.pop(user_id, [])
+        state = _debounce_states.pop(user_id, None)
+        _debounce_tasks.pop(user_id, None)
+    if not messages or state is None:
+        return
+    anchor = messages[-1]  # reply context anchored on the latest message
+    merged = "\n".join(m.text for m in messages if m.text)
+    try:
+        await _process_text(user_id, anchor, merged, state)
+    except Exception:
+        logger.exception("Debounced AI processing failed for user %d", user_id)
+
+
+async def _process_text(user_id: int, message: Message, text: str, state: FSMContext) -> None:
+    """Run the AI agent on *text* and render the response. Extracted from the
+    former handle_free_text body so it can be reused by the debounce flush."""
     # "Thinking" is cosmetic — don't crash if proxy is temporarily down
     thinking = None
     try:
@@ -115,7 +162,7 @@ async def handle_free_text(message: Message, state: FSMContext) -> None:
     except Exception:
         pass
 
-    response = await ai_agent.process_message(user_id, message.text)
+    response = await ai_agent.process_message(user_id, text)
     response.text = _clean_response(response.text)
 
     if response.pending_action:
