@@ -1,15 +1,25 @@
-"""/start, /auth, /menu, timezone handlers."""
+"""/start, /auth, /menu, /events, timezone handlers."""
 
+import logging
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+)
 
 from app.bot.keyboards import back_kb, main_menu_kb, menu_reply_kb, timezone_kb
 from app.bot.states import SetTimezoneFSM
 from app.services.auth_service import auth_service
+from app.services.geocoding import reverse_geocode_city
+
+logger = logging.getLogger(__name__)
 
 router = Router(name="common")
 
@@ -73,6 +83,76 @@ async def reply_menu_button(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     await message.answer("📋 Main menu:", reply_markup=await _menu_kb(message.from_user.id))
+
+
+# ── Event discovery (location-based) ─────────────────────────────────────────
+
+
+def _events_location_kb() -> ReplyKeyboardMarkup:
+    """Reply keyboard with a location-request button."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📍 Поделиться локацией", request_location=True)],
+            [KeyboardButton(text="📋 Menu")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+@router.message(F.text == "🎵 Концерты")
+async def reply_events_button(message: Message) -> None:
+    await cmd_events(message)
+
+
+@router.message(Command("events"))
+async def cmd_events(message: Message) -> None:
+    """Ask the user to share their location, then look up events nearby."""
+    if message.from_user is None:
+        return
+    await message.answer(
+        "🎵 Поделись локацией — найду концерты, фестивали и стендапы поблизости.\n\n"
+        "Если не хочешь делиться, напиши «концерты в <город> на выходных» — "
+        "AI-ассистент тоже умеет.",
+        reply_markup=_events_location_kb(),
+    )
+
+
+@router.message(F.location)
+async def handle_location(message: Message, state: FSMContext) -> None:
+    """Handle a Telegram location share — reverse-geocode + run AI event search."""
+    if message.from_user is None or message.location is None:
+        return
+    user_id = message.from_user.id
+    lat = message.location.latitude
+    lon = message.location.longitude
+    logger.info("Got location from user %d: %.4f, %.4f", user_id, lat, lon)
+
+    city = await reverse_geocode_city(lat, lon)
+    if not city:
+        await message.answer(
+            "⚠️ Не получилось определить город по координатам. "
+            "Попробуй ещё раз или напиши запрос текстом.",
+            reply_markup=menu_reply_kb(),
+        )
+        return
+
+    await message.answer(
+        f"📍 Локация: <b>{city}</b>. Ищу события на ближайшие выходные…",
+        parse_mode="HTML",
+        reply_markup=menu_reply_kb(),
+    )
+
+    # Reuse the AI text-mode pipeline so the response goes through the same
+    # confirmation / formatting / debounce machinery as a normal chat message.
+    from app.bot.handlers.text_mode import _process_text
+
+    prompt = (
+        f"Найди концерты, фестивали и стендап-события в городе {city} "
+        f"на ближайшие выходные. Дай 3–5 вариантов с датой, площадкой и "
+        f"ссылкой на билеты."
+    )
+    await _process_text(user_id, message, prompt, state)
 
 
 @router.message(Command("disconnect"))

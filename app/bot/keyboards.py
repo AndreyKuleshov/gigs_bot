@@ -18,7 +18,9 @@ def menu_reply_kb() -> ReplyKeyboardMarkup:
     inline keyboards being shown or FSM states changing.
     """
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📋 Menu")]],
+        keyboard=[
+            [KeyboardButton(text="📋 Menu"), KeyboardButton(text="🎵 Концерты")],
+        ],
         resize_keyboard=True,
         is_persistent=True,
     )

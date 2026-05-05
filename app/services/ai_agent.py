@@ -194,8 +194,11 @@ _SYSTEM_PROMPT = (
     "'concerts in {city} this weekend tickets', "
     "'stand-up comedy {city} April 25 26 2026', "
     "'parties events {city} {timezone} Saturday'. "
-    "If the first search is thin, call web_search again with different keywords "
-    "(e.g. add 'meetup', 'gig', 'festival', 'live music').\n"
+    "Run AT LEAST ONE follow-up search restricted to a specialised event "
+    "source — e.g. 'concerts {city} site:songkick.com', "
+    "'site:bandsintown.com {city}', 'site:ticketmaster.com {city} concerts', "
+    "'site:ra.co {city}' (electronic / club nights). These usually give "
+    "more reliable dates and ticket links than generic web pages.\n"
     "  3. Present 3-5 concrete options. For EACH one include: "
     "<b>name</b>, date/time, venue, and a clickable ticket/info link "
     '(use <a href="...">text</a>). If you couldn\'t find reliable info for an '
