@@ -1,6 +1,7 @@
 """Bot and Dispatcher factory."""
 
 import asyncio
+import contextlib
 import logging
 import os
 from typing import Any, cast
@@ -43,7 +44,7 @@ class _NativeProxySession(AiohttpSession):
         self,
         bot: Bot,
         method: Any,
-        timeout: Any = None,
+        timeout: Any = None,  # noqa: ASYNC109 — overrides aiogram, sig fixed
     ) -> Any:
         effective_timeout = _BOT_TIMEOUT if timeout is None else timeout
         last_exc: BaseException | None = None
@@ -128,18 +129,14 @@ def create_dispatcher() -> Dispatcher:
         elif update.callback_query and update.callback_query.message:
             chat_id = update.callback_query.message.chat.id
         if chat_id and event.update.bot:
-            try:
+            with contextlib.suppress(Exception):
                 await event.update.bot.send_message(
                     chat_id,
                     "⚠️ Произошла ошибка, попробуй ещё раз.",
                 )
-            except Exception:
-                pass  # can't reach user — already logged above
         if update.callback_query:
-            try:
+            with contextlib.suppress(Exception):
                 await update.callback_query.answer()
-            except Exception:
-                pass
         return True  # mark as handled
 
     return dp

@@ -8,6 +8,10 @@ from fastapi import FastAPI, HTTPException, Request
 
 from app.core.config import settings
 
+# Hold strong refs to fire-and-forget webhook tasks. Without this Python's GC
+# can cancel them mid-flight (RUF006). Tasks remove themselves on completion.
+_webhook_tasks: set[asyncio.Task] = set()
+
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
@@ -82,7 +86,9 @@ def create_app() -> FastAPI:
         update = Update.model_validate(data)
         # Fire-and-forget: return 200 immediately so Telegram doesn't retry.
         # Processing (including outbound API calls) happens in the background.
-        asyncio.create_task(request.app.state.dp.feed_update(request.app.state.bot, update))
+        task = asyncio.create_task(request.app.state.dp.feed_update(request.app.state.bot, update))
+        _webhook_tasks.add(task)
+        task.add_done_callback(_webhook_tasks.discard)
         return {"ok": True}
 
     return app

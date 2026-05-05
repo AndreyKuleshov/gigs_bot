@@ -41,7 +41,20 @@ target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+# E,F,I,UP,B = pycodestyle/pyflakes/imports/pyupgrade/bugbear (the existing baseline)
+# SIM = simplifications, RET = return-statement bugs, ASYNC = asyncio gotchas,
+# PIE = misc, RUF = ruff-specific, S = security (bandit-lite), C4 = comprehensions.
+select = ["E", "F", "I", "UP", "B", "SIM", "RET", "ASYNC", "PIE", "RUF", "C4"]
+ignore = [
+    "B008",    # function calls in argument defaults — common with Depends/typer
+    "SIM108",  # ternary nudge — sometimes if/else is clearer
+    "RUF001",  # ambiguous unicode chars in strings (we have lots of Russian)
+    "RUF002",  # same in docstrings
+    "RUF003",  # same in comments
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]  # asserts are fine in tests
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

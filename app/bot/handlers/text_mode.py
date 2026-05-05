@@ -1,6 +1,7 @@
 """Free-text mode: route plain messages through the AI agent."""
 
 import asyncio
+import contextlib
 import logging
 import re
 
@@ -157,10 +158,8 @@ async def _process_text(user_id: int, message: Message, text: str, state: FSMCon
     former handle_free_text body so it can be reused by the debounce flush."""
     # "Thinking" is cosmetic — don't crash if proxy is temporarily down
     thinking = None
-    try:
+    with contextlib.suppress(Exception):
         thinking = await message.answer("🤔 Thinking…")
-    except Exception:
-        pass
 
     response = await ai_agent.process_message(user_id, text)
     response.text = _clean_response(response.text)
@@ -181,19 +180,16 @@ async def _process_text(user_id: int, message: Message, text: str, state: FSMCon
             response.image_url = None
         else:
             if thinking:
-                try:
+                with contextlib.suppress(Exception):
                     await thinking.delete()
-                except Exception:
-                    pass
                 thinking = None
             caption = _strip_html(response.text)[:_MAX_CAPTION]
-            try:
+            with contextlib.suppress(Exception):
                 await message.answer_photo(photo=URLInputFile(response.image_url), caption=caption)
                 if "<" in response.text:
                     await _send_text(message, response.text)
                 return
-            except Exception:
-                pass  # Fall through to text-only
+            # Fall through to text-only when answer_photo failed
 
     await _edit_or_send(thinking, message, response.text)
 
@@ -208,17 +204,13 @@ async def ai_confirm_callback(callback: CallbackQuery, state: FSMContext) -> Non
     choice = callback.data.split(":", 1)[1] if callback.data else ""
 
     # Always strip the inline buttons so the original proposal text stays visible.
-    try:
+    with contextlib.suppress(Exception):
         await msg.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
 
     if choice == "no":
         await state.clear()
-        try:
+        with contextlib.suppress(Exception):
             await msg.answer("❌ Отменено.")
-        except Exception:
-            pass
         ai_agent.note_assistant(user_id, "[User declined the proposed calendar action.]")
         await callback.answer()
         return
@@ -229,18 +221,14 @@ async def ai_confirm_callback(callback: CallbackQuery, state: FSMContext) -> Non
     pending_tool = data.get("pending_tool")
     pending_args = data.get("pending_args")
     if not pending_tool or pending_args is None:
-        try:
+        with contextlib.suppress(Exception):
             await msg.answer("❌ Ошибка: действие устарело. Попробуй ещё раз.")
-        except Exception:
-            pass
         await callback.answer()
         return
 
     busy = None
-    try:
+    with contextlib.suppress(Exception):
         busy = await msg.answer("⏳ Выполняю…")
-    except Exception:
-        pass
     try:
         result = await ai_agent.execute_confirmed_action(user_id, pending_tool, pending_args)
         # _run_calendar_tool may return a user-facing error string (revoked token,
