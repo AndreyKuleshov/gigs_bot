@@ -26,7 +26,7 @@ The bot supports two interaction modes:
   options with ticket links, and offers to add picks to the calendar
 - AI-powered web search (DuckDuckGo) and image search for event details
 - Token encryption at rest using Fernet symmetric encryption
-- Proxy support for restricted environments (e.g. PythonAnywhere)
+- Optional proxy support for restricted networks (`PROXY_URL` env)
 - Global error handler with user-facing error messages
 - Automatic retry with exponential backoff for transient API/proxy errors
 - Overnight event handling (e.g. 20:00–00:00 automatically spans to next day)
@@ -89,8 +89,7 @@ gigs_bot/
 │           └── text_mode.py   # AI agent message handler with markdown→HTML conversion
 ├── tests/                     # Unit test suite (pytest)
 ├── main.py                    # Entry point: FastAPI + bot (polling or webhook)
-├── wsgi.py                    # PythonAnywhere WSGI entry point
-├── deploy.sh                  # Deployment script (git pull + pip install)
+├── Dockerfile                 # Container build for Coolify / any Docker host
 └── pyproject.toml             # Project metadata, dependencies, tool configuration
 ```
 
@@ -469,24 +468,14 @@ uv run python main.py
 
 Runs in long-polling mode (no webhook needed). Bot pulls updates from Telegram API.
 
-### PythonAnywhere (production)
+### Docker host (Coolify / Fly.io / Render / plain Docker)
 
-1. Clone the repo to PythonAnywhere
-2. Create `.env` with production values (set `WEBHOOK_URL`, `WEBHOOK_SECRET`, `PROXY_URL`)
-3. Set up a Web App pointing to `wsgi.py`
-4. Deploy updates:
-   ```bash
-   cd ~/gigs_bot && bash deploy.sh
-   ```
-5. Reload the web app from the PythonAnywhere dashboard
-6. Reminders and the daily morning digest run in-process (no cron task needed).
-   Enable them via `REMINDER_CRON` and `DAILY_DIGEST_ENABLED` env vars.
-
-### Docker / Fly.io / Render
-
-1. Set `WEBHOOK_URL` to your public domain
-2. Set `DATABASE_URL` to PostgreSQL if desired
-3. Run `python main.py` — FastAPI starts with webhook mode and background scheduler
+1. Build with the included `Dockerfile` (multi-stage, python:3.11-slim + uv).
+2. Mount a persistent volume at `/data` for the SQLite DB.
+3. Provide env vars (see table above). Set `WEBHOOK_URL` to your public
+   HTTPS URL and update `GOOGLE_REDIRECT_URI` in Google Cloud Console.
+4. Reminders and the daily morning digest run in-process via FastAPI's
+   lifespan — enable with `REMINDER_CRON` and `DAILY_DIGEST_ENABLED` in env.
 
 ---
 
@@ -495,6 +484,5 @@ Runs in long-polling mode (no webhook needed). Bot pulls updates from Telegram A
 - Replace `http://localhost:8000` with your public domain in `.env` and Google Cloud Console redirect URIs
 - Set `DEBUG=false`
 - Store `FERNET_KEY` securely — losing it makes all stored tokens permanently unreadable
-- PythonAnywhere: the proxy (`http://proxy.server:3128`) is required for outbound HTTP; the bot retries up to 5 times with exponential backoff on proxy failures
-- `sendPhoto` does not work through PythonAnywhere's proxy — images are embedded as clickable links instead
+- If a proxy is required (`PROXY_URL` env): the bot retries up to 5 times with exponential backoff on proxy failures, and `sendPhoto` is auto-degraded to a clickable link (the proxy chokes on multipart photo uploads).
 - Use a process manager (systemd, Docker, supervisord) to keep the process alive on self-hosted deployments
