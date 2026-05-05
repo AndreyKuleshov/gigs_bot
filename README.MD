@@ -47,7 +47,8 @@ The bot supports two interaction modes:
 | Auth | Google OAuth2 + PKCE | Secure authorization flow |
 | Package manager | uv | Fast dependency management |
 | Linting | ruff + basedpyright | Code quality, type checking |
-| Testing | pytest + pytest-asyncio | Unit tests |
+| Testing | pytest + pytest-asyncio + pytest-cov | Unit tests with branch coverage |
+| Pre-commit | ruff, basedpyright, pre-commit-hooks (detect-private-key etc.) | Hooks gate every commit |
 
 ---
 
@@ -67,8 +68,8 @@ gigs_bot/
 │   ├── services/
 │   │   ├── auth_service.py    # Google OAuth2 flow, token management, user CRUD
 │   │   ├── calendar_service.py # Google Calendar API wrapper with retry logic
-│   │   ├── ai_agent.py        # OpenAI LLM agent with function calling (6 tools)
-│   │   └── reminder_service.py # Scheduled event reminder sender
+│   │   ├── ai_agent.py        # OpenAI LLM agent with function calling (7 tools)
+│   │   └── reminder_service.py # Reminders + cron-driven daily morning digest
 │   ├── api/
 │   │   ├── app.py             # FastAPI application factory with lifespan management
 │   │   ├── deps.py            # FastAPI dependencies (auth header extraction)
@@ -80,9 +81,10 @@ gigs_bot/
 │       ├── states.py          # FSM state groups (6 state machines)
 │       ├── keyboards.py       # Inline keyboard builders (menus, calendars, timezones)
 │       ├── polling.py         # Long-polling runner (dev mode)
-│       ├── scheduler.py       # Background cron scheduler for reminders
+│       ├── scheduler.py       # Cron-driven schedulers: reminders + daily digest
 │       ├── middlewares/
-│       │   └── db_session.py  # Injects async DB session into every update
+│       │   ├── db_session.py  # Injects async DB session into every update
+│       │   └── user_sync.py   # Upserts Telegram username / full_name on every update
 │       └── handlers/
 │           ├── common.py      # /start, /auth, /menu, /disconnect, timezone selection
 │           ├── button_mode.py # FSM-driven CRUD via inline keyboards
@@ -100,13 +102,13 @@ gigs_bot/
 | Column | Type | Description |
 |---|---|---|
 | `id` | BigInteger (PK) | Telegram user ID |
-| `username` | String(255) | Telegram @username |
-| `full_name` | String(512) | Display name |
+| `username` | String(255) | Telegram @username (kept fresh by `UserSyncMiddleware`) |
+| `full_name` | String(512) | Display name (used in the daily greeting) |
 | `google_tokens_encrypted` | Text | Fernet-encrypted JSON blob of OAuth tokens |
-| `mode` | String(20) | UI mode: `"button"` or `"text"` |
 | `timezone` | String(50) | IANA timezone (default: `"UTC"`) |
 | `selected_calendar_id` | String(255) | Google Calendar ID |
 | `selected_calendar_name` | String(255) | Display name of selected calendar |
+| `last_daily_sent_date` | Date | Idempotency guard for the daily digest scheduler |
 | `created_at` | DateTime | Row creation timestamp |
 | `updated_at` | DateTime | Last update timestamp |
 
@@ -353,7 +355,7 @@ uv run python main.py
 uv sync --extra dev
 ```
 
-This installs `pytest`, `pytest-asyncio`, `pytest-mock`, `ruff`, `basedpyright`, and `mypy`.
+This installs `pytest`, `pytest-asyncio`, `pytest-mock`, `pytest-cov`, `ruff`, `basedpyright`, and `pre-commit`.
 
 ### Run the full test suite
 
@@ -379,17 +381,29 @@ uv run pytest tests/test_ai_agent.py
 uv run pytest tests/test_ai_agent.py::TestExecuteTool::test_mutating_tool_intercepted
 ```
 
+### Run with coverage
+
+```bash
+uv run pytest --cov=app --cov-report=term-missing
+```
+
 ### Test files and what they cover
 
-| File | Tests | Description |
-|---|---|---|
-| `tests/test_config.py` | 2 | Settings defaults and Google scopes |
-| `tests/test_states.py` | 6 | All FSM state groups are defined and accessible |
-| `tests/test_keyboards.py` | 14 | All keyboard builders: main menu (with/without calendar), confirm, back, timezone, calendar list |
-| `tests/test_security.py` | 4 | Fernet encrypt/decrypt roundtrip, different data types |
-| `tests/test_calendar_service.py` | 9 | Pydantic models (EventCreate, EventUpdate, EventRead), `_parse_dt` for ISO/date parsing |
-| `tests/test_ai_agent.py` | 9 | AgentResponse/PendingAction dataclasses, tool interception (mutating vs read-only), timezone fixing logic |
-| **Total** | **44** | |
+| File | Description |
+|---|---|
+| `tests/test_config.py` | Settings defaults and Google scopes |
+| `tests/test_states.py` | All FSM state groups are defined and accessible |
+| `tests/test_keyboards.py` | All keyboard builders: main menu, confirm, back, timezone, calendar list |
+| `tests/test_security.py` | Fernet encrypt/decrypt roundtrip |
+| `tests/test_calendar_service.py` | Pydantic event models, `_parse_dt` for ISO/date parsing |
+| `tests/test_ai_agent.py` | Tool interception, timezone-fixing, `_resolve_date_range`, `_city_from_tz`, system-prompt rendering |
+| `tests/test_daily_digest.py` | `send_daily_digest_to_user`: gating, dedup, force, name fallback via `bot.get_chat`, LLM empty-day fallback |
+| `tests/test_user_sync_middleware.py` | Middleware extracts `from_user` from each update kind and upserts |
+| `tests/test_button_mode_auth.py` | `_handle_auth_failure` clears state, renders OAuth-link prompt; `_is_auth_error` classifier |
+| `tests/test_text_debounce.py` | 3-msg burst → single AI call, debounce=0 inline path, multi-user buffers, auth short-circuit |
+| `tests/test_send_reminders.py` | `_remind_user` happy path, no-creds/no-events early returns, invalid tz → UTC; `send_reminders` swallows per-user exceptions |
+| `tests/test_scheduler_guards.py` | `start_scheduler` / `start_daily_digest_scheduler` no-op on empty cron; one-iteration loop |
+| `tests/test_app_factory.py` | `create_app` returns FastAPI with `/health`, `/webhook/telegram`, `/auth/google*` routes |
 
 ### Test environment
 
@@ -412,7 +426,17 @@ uv run ruff format .         # Auto-format
 uv run basedpyright          # Type checking
 ```
 
-Pre-commit hooks run `ruff`, `ruff-format`, and `basedpyright` automatically on every commit.
+### Pre-commit
+
+Hooks gate every commit with `ruff`, `ruff-format`, `basedpyright`, plus
+`pre-commit-hooks` for `detect-private-key`, `check-added-large-files`,
+`check-yaml/toml`, `check-merge-conflict`, `end-of-file-fixer`, and
+`trailing-whitespace`.
+
+```bash
+uv run pre-commit install          # one-time, wires .git/hooks
+uv run pre-commit run --all-files  # run all hooks ad-hoc
+```
 
 ---
 
