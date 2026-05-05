@@ -76,6 +76,12 @@ out/
 .AppleDouble
 .LSOverride
 
+# ── Local DB / runbooks (never commit) ────────────────────────────────────────
+gigs_bot.db
+*.sqlite
+*.sqlite3
+MIGRATION_PLAN.md
+
 # ── Windows ───────────────────────────────────────────────────────────────────
 Thumbs.db
 ehthumbs.db
