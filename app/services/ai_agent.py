@@ -218,11 +218,14 @@ _SYSTEM_PROMPT = (
     "  3. Present 3-5 concrete options. For EACH one include ALL of: "
     "<b>name</b>, date/time, venue, and a clickable link "
     '(use <a href="...">text</a>). The link is MANDATORY — either a ticket '
-    "purchase URL or, failing that, an info page about the event. If you "
-    "cannot produce a working link for an option, DROP it. Better fewer "
-    "options each with a link than a long list where some entries lack "
-    "links. Do not invent URLs — only use URLs that came from web_search or "
-    "fetch_url results.\n"
+    "purchase URL or an info page about THAT specific event. CRITICAL: "
+    "the link must point to the INDIVIDUAL event, not to the listing/"
+    "metro-area page you got it from. fetch_url's output puts URLs in "
+    "[brackets] right after each anchor's text — use those per-event URLs, "
+    "not the listing page you originally fetched. If a per-event URL is "
+    "not available, DROP that option (do NOT substitute the listing URL). "
+    "Better fewer options each with a real link than a long list with "
+    "fake/listing links. Do not invent URLs.\n"
     "  4. At the end, ask the user which one(s) they'd like to add to the calendar. "
     "If they confirm, call create_event for each picked one.\n"
     "  5. NEVER fabricate events, ticket URLs, venues, or dates. If the web search "
@@ -531,11 +534,22 @@ async def _web_search(query: str, max_results: int = 5) -> str:
 _FETCH_URL_MAX_CHARS = 3500
 
 
-async def _fetch_url(url: str) -> str:
-    """Download a page, strip HTML tags, return up to ~3500 chars of text.
+def _absolutize(href: str, base_url: str) -> str:
+    """Make a relative href absolute, given the page base URL."""
+    from urllib.parse import urljoin
 
-    Used by the AI agent to read event-listing pages (bandsintown,
-    songkick, ticketmaster, …) when search snippets aren't enough.
+    return urljoin(base_url, href)
+
+
+async def _fetch_url(url: str) -> str:
+    """Download a page, preserve link URLs, strip remaining tags.
+
+    The agent uses this to read event-listing pages (bandsintown, songkick,
+    ticketmaster, ra.co, venue sites) when search snippets aren't enough.
+    Anchor tags (`<a href=...>text</a>`) are converted to ``text [URL]``
+    BEFORE the rest of the HTML is stripped, so the agent can quote the
+    real per-event link instead of substituting the listing page URL.
+    Returns ≤3500 chars of text.
     """
     import re
 
@@ -552,13 +566,33 @@ async def _fetch_url(url: str) -> str:
             resp = await c.get(url, headers=headers)
             resp.raise_for_status()
             html = resp.text
+            base_url = str(resp.url)  # follow_redirects may have changed it
     except Exception as exc:
         logger.warning("fetch_url failed for %s: %s: %s", url, type(exc).__name__, exc)
         return f"Error: could not fetch {url} ({type(exc).__name__})"
 
-    # Drop scripts/styles entirely, then strip tags, collapse whitespace.
+    # Drop scripts/styles entirely.
     html = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.IGNORECASE)
     html = re.sub(r"<style[\s\S]*?</style>", " ", html, flags=re.IGNORECASE)
+
+    # Convert <a href="X">label</a> → "label [X]" with absolutised X so the
+    # agent can quote per-event URLs after the tag-strip below.
+    def _replace_anchor(match: "re.Match[str]") -> str:
+        href = _absolutize(match.group(1).strip(), base_url)
+        inner = re.sub(r"<[^>]+>", " ", match.group(2))
+        inner = re.sub(r"\s+", " ", inner).strip()
+        if not inner:
+            return f" [{href}] "
+        return f" {inner} [{href}] "
+
+    html = re.sub(
+        r'<a\s+[^>]*?href=["\']([^"\']+)["\'][^>]*>([\s\S]*?)</a>',
+        _replace_anchor,
+        html,
+        flags=re.IGNORECASE,
+    )
+
+    # Now strip all remaining tags and collapse whitespace.
     text = re.sub(r"<[^>]+>", " ", html)
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) > _FETCH_URL_MAX_CHARS:

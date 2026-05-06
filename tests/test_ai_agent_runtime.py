@@ -114,10 +114,16 @@ async def test_web_search_returns_unavailable_on_failure():
 # ── _fetch_url ────────────────────────────────────────────────────────────────
 
 
-def _fake_httpx_client(html: str | None = None, *, raise_on_get: Exception | None = None):
+def _fake_httpx_client(
+    html: str | None = None,
+    *,
+    raise_on_get: Exception | None = None,
+    final_url: str = "https://x.test",
+):
     """Build a context-managed httpx.AsyncClient mock that returns *html*."""
     response = MagicMock()
     response.text = html or ""
+    response.url = final_url
     response.raise_for_status = MagicMock()
     client = MagicMock()
     if raise_on_get is not None:
@@ -173,6 +179,32 @@ async def test_fetch_url_handles_network_error():
     ):
         out = await _fetch_url("https://x.test")
     assert out.startswith("Error: could not fetch")
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_preserves_anchor_links_in_brackets():
+    """Anchors should survive tag-strip as 'text [URL]'."""
+    html = (
+        "<html><body>"
+        '<a href="https://example.com/event/42">Billy Idol — Belgrade</a>'
+        " on July 9.</body></html>"
+    )
+    with patch("httpx.AsyncClient", return_value=_fake_httpx_client(html)):
+        out = await _fetch_url("https://example.com/listing")
+    assert "Billy Idol — Belgrade" in out
+    assert "[https://example.com/event/42]" in out
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_absolutizes_relative_links():
+    """Relative hrefs are joined against the page URL."""
+    html = '<a href="/concerts/123">Show</a>'
+    with patch(
+        "httpx.AsyncClient",
+        return_value=_fake_httpx_client(html, final_url="https://bandsintown.com/c/belgrade"),
+    ):
+        out = await _fetch_url("https://bandsintown.com/c/belgrade")
+    assert "[https://bandsintown.com/concerts/123]" in out
 
 
 @pytest.mark.asyncio
