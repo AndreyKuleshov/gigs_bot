@@ -41,11 +41,14 @@ COPY --chown=app:app . /app
 RUN mkdir -p /data && chown app:app /data
 VOLUME ["/data"]
 
-USER app
+# Entrypoint runs as root only long enough to fix /data ownership (a docker-cp
+# from outside leaves files as host-uid:gid), then drops to the `app` user.
+COPY --chown=root:root docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://localhost:8000/health || exit 1
 
-CMD ["python", "main.py"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

@@ -215,10 +215,14 @@ _SYSTEM_PROMPT = (
     "metal / electronic / stand-up / etc., do NOT include unrelated event "
     "types (conferences, exhibitions, classical, choir festivals) just to "
     "hit a 3-5 count. Filter by the requested genre.\n"
-    "  3. Present 3-5 concrete options. For EACH one include: "
-    "<b>name</b>, date/time, venue, and a clickable ticket/info link "
-    '(use <a href="...">text</a>). If you couldn\'t find reliable info for an '
-    "option, skip it — don't invent details.\n"
+    "  3. Present 3-5 concrete options. For EACH one include ALL of: "
+    "<b>name</b>, date/time, venue, and a clickable link "
+    '(use <a href="...">text</a>). The link is MANDATORY — either a ticket '
+    "purchase URL or, failing that, an info page about the event. If you "
+    "cannot produce a working link for an option, DROP it. Better fewer "
+    "options each with a link than a long list where some entries lack "
+    "links. Do not invent URLs — only use URLs that came from web_search or "
+    "fetch_url results.\n"
     "  4. At the end, ask the user which one(s) they'd like to add to the calendar. "
     "If they confirm, call create_event for each picked one.\n"
     "  5. NEVER fabricate events, ticket URLs, venues, or dates. If the web search "
