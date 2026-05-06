@@ -199,6 +199,22 @@ _SYSTEM_PROMPT = (
     "'site:bandsintown.com {city}', 'site:ticketmaster.com {city} concerts', "
     "'site:ra.co {city}' (electronic / club nights). These usually give "
     "more reliable dates and ticket links than generic web pages.\n"
+    "  2b. CRITICAL — search snippets often DON'T contain real event dates. "
+    "When you get a URL from a listing site (bandsintown.com/c/<city>, "
+    "songkick.com/metro-areas/..., ticketmaster.com pages, ra.co/events/..., "
+    "venue homepages), call fetch_url on it and read the actual page "
+    "content for concrete event names + dates. Don't fabricate an event "
+    "from just a URL slug.\n"
+    "  2c. STRICT FILTER — every option you present MUST include a CONCRETE "
+    "DATE (day + month + year, or at least day + month). If you cannot "
+    "extract a real date, DROP that option — do NOT write 'дата не указана' "
+    "or 'TBD'. If after all searches you have fewer than 2 dated options, "
+    "say so honestly: 'Не нашёл публичных анонсов с конкретными датами для "
+    "<город> на этот период. Вот общая ссылка: <bandsintown URL>', and stop.\n"
+    "  2d. STRICT GENRE — if the user asked specifically for rock / "
+    "metal / electronic / stand-up / etc., do NOT include unrelated event "
+    "types (conferences, exhibitions, classical, choir festivals) just to "
+    "hit a 3-5 count. Filter by the requested genre.\n"
     "  3. Present 3-5 concrete options. For EACH one include: "
     "<b>name</b>, date/time, venue, and a clickable ticket/info link "
     '(use <a href="...">text</a>). If you couldn\'t find reliable info for an '
@@ -411,6 +427,31 @@ _TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "fetch_url",
+            "description": (
+                "Download the readable text content of a web page. Use this AFTER "
+                "web_search returned a URL to a specialised event database "
+                "(songkick.com, bandsintown.com, ticketmaster.com, ra.co, "
+                "venue site, etc.) so you can extract real event names + dates "
+                "from the listing instead of guessing from the search snippet. "
+                "Returns up to ~3500 characters of stripped text. If you need a "
+                "second page, call fetch_url again with the next URL."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Absolute http(s) URL to fetch.",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "find_event_image",
             "description": (
                 "Find a photo image for an event, artist, or venue. "
@@ -483,6 +524,44 @@ async def _web_search(query: str, max_results: int = 5) -> str:
     return "\n\n".join(lines)
 
 
+_FETCH_URL_MAX_CHARS = 3500
+
+
+async def _fetch_url(url: str) -> str:
+    """Download a page, strip HTML tags, return up to ~3500 chars of text.
+
+    Used by the AI agent to read event-listing pages (bandsintown,
+    songkick, ticketmaster, …) when search snippets aren't enough.
+    """
+    import re
+
+    import httpx
+
+    if not url.lower().startswith(("http://", "https://")):
+        return f"Error: invalid URL: {url}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; gigs-bot/1.0; +https://t.me/)",
+        "Accept-Language": "en,ru;q=0.7",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0), follow_redirects=True) as c:
+            resp = await c.get(url, headers=headers)
+            resp.raise_for_status()
+            html = resp.text
+    except Exception as exc:
+        logger.warning("fetch_url failed for %s: %s: %s", url, type(exc).__name__, exc)
+        return f"Error: could not fetch {url} ({type(exc).__name__})"
+
+    # Drop scripts/styles entirely, then strip tags, collapse whitespace.
+    html = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.IGNORECASE)
+    html = re.sub(r"<style[\s\S]*?</style>", " ", html, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > _FETCH_URL_MAX_CHARS:
+        text = text[:_FETCH_URL_MAX_CHARS] + "… [truncated]"
+    return text or "(empty page)"
+
+
 async def _find_event_image(query: str) -> str | None:
     try:
         results = await asyncio.to_thread(_ddgs_images_sync, query)
@@ -539,6 +618,9 @@ class AIAgent:
                 query=args.get("query", ""),
                 max_results=min(int(args.get("max_results", 5)), 10),
             )
+
+        if name == "fetch_url":
+            return await _fetch_url(args.get("url", ""))
 
         if name == "find_event_image":
             url = await _find_event_image(args.get("query", ""))

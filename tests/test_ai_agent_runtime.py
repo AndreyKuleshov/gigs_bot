@@ -13,6 +13,7 @@ from app.services.ai_agent import (
     _ddgs_images_sync,
     _ddgs_proxy,
     _ddgs_text_sync,
+    _fetch_url,
     _find_event_image,
     _web_search,
     ai_agent,
@@ -108,6 +109,92 @@ async def test_web_search_returns_unavailable_on_failure():
     ):
         out = await _web_search("q")
     assert "unavailable" in out.lower()
+
+
+# ── _fetch_url ────────────────────────────────────────────────────────────────
+
+
+def _fake_httpx_client(html: str | None = None, *, raise_on_get: Exception | None = None):
+    """Build a context-managed httpx.AsyncClient mock that returns *html*."""
+    response = MagicMock()
+    response.text = html or ""
+    response.raise_for_status = MagicMock()
+    client = MagicMock()
+    if raise_on_get is not None:
+        client.get = AsyncMock(side_effect=raise_on_get)
+    else:
+        client.get = AsyncMock(return_value=response)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_strips_html_tags():
+    html = "<html><body><h1>Concerts</h1><p>Belgrade May 2026</p></body></html>"
+    with patch("httpx.AsyncClient", return_value=_fake_httpx_client(html)):
+        out = await _fetch_url("https://bandsintown.com/c/belgrade-rs")
+    assert "Concerts" in out and "Belgrade May 2026" in out
+    assert "<" not in out and ">" not in out
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_drops_script_and_style():
+    html = (
+        "<html><head><style>.x{}</style><script>alert(1)</script></head>"
+        "<body>real content</body></html>"
+    )
+    with patch("httpx.AsyncClient", return_value=_fake_httpx_client(html)):
+        out = await _fetch_url("https://x.test")
+    assert "alert" not in out and ".x{" not in out
+    assert "real content" in out
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_truncates_long_text():
+    html = "<p>" + ("X" * 10000) + "</p>"
+    with patch("httpx.AsyncClient", return_value=_fake_httpx_client(html)):
+        out = await _fetch_url("https://x.test")
+    assert "[truncated]" in out
+    assert len(out) < 4000
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_rejects_non_http_url():
+    out = await _fetch_url("file:///etc/passwd")
+    assert out.startswith("Error: invalid URL")
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_handles_network_error():
+    with patch(
+        "httpx.AsyncClient",
+        return_value=_fake_httpx_client(raise_on_get=ConnectionError("dns")),
+    ):
+        out = await _fetch_url("https://x.test")
+    assert out.startswith("Error: could not fetch")
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_returns_empty_marker_when_page_is_blank():
+    with patch("httpx.AsyncClient", return_value=_fake_httpx_client("")):
+        out = await _fetch_url("https://x.test")
+    assert out == "(empty page)"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_dispatches_fetch_url():
+    agent = AIAgent()
+    with patch("app.services.ai_agent._fetch_url", new=AsyncMock(return_value="page text")) as fu:
+        out = await agent._execute_tool(
+            user_id=1,
+            name="fetch_url",
+            args={"url": "https://x.test"},
+            image_holder=[],
+            pending_holder=[],
+        )
+    assert out == "page text"
+    fu.assert_awaited_once_with("https://x.test")
 
 
 @pytest.mark.asyncio
