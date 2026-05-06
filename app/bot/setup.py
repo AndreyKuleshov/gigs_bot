@@ -11,7 +11,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import ErrorEvent
+from aiogram.types import BotCommand, ErrorEvent
 
 from app.bot.handlers import button_mode, common, text_mode
 from app.bot.middlewares.db_session import DbSessionMiddleware
@@ -95,6 +95,23 @@ def create_bot() -> Bot:
     else:
         session = AiohttpSession()
     return Bot(token=settings.telegram_bot_token, session=session)
+
+
+async def setup_bot_commands(bot: Bot) -> None:
+    """Register the slash-command list shown when users type "/" in Telegram.
+
+    Idempotent: safe to call on every startup. Telegram caches the menu on
+    its side so re-applying the same list is a no-op for clients.
+    """
+    await bot.set_my_commands(
+        [
+            BotCommand(command="start", description="Запустить бота"),
+            BotCommand(command="menu", description="Главное меню"),
+            BotCommand(command="events", description="🎵 Концерты поблизости"),
+            BotCommand(command="auth", description="Подключить Google Calendar"),
+            BotCommand(command="disconnect", description="Отключить Google Calendar"),
+        ]
+    )
 
 
 def create_dispatcher() -> Dispatcher:

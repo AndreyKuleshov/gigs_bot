@@ -19,9 +19,11 @@ class TestMainMenuKb:
     def test_no_calendar_no_timezone_shows_only_select_buttons(self):
         kb = main_menu_kb()
         buttons = [btn.text for row in kb.inline_keyboard for btn in row]
-        assert "Select calendar" in buttons[0]
-        assert "Set timezone" in buttons[1]
-        # Should NOT have action buttons
+        # The find-events button is present regardless of calendar/auth state
+        assert any("Концерты" in b for b in buttons)
+        assert any("Select calendar" in b for b in buttons)
+        assert any("Set timezone" in b for b in buttons)
+        # Should NOT have calendar-specific action buttons
         assert not any("List events" in b for b in buttons)
 
     def test_with_calendar_shows_action_buttons(self):

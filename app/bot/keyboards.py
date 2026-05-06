@@ -18,9 +18,7 @@ def menu_reply_kb() -> ReplyKeyboardMarkup:
     inline keyboards being shown or FSM states changing.
     """
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📋 Menu"), KeyboardButton(text="🎵 Концерты")],
-        ],
+        keyboard=[[KeyboardButton(text="📋 Menu")]],
         resize_keyboard=True,
         is_persistent=True,
     )
@@ -39,6 +37,7 @@ def main_menu_kb(
             InlineKeyboardButton(text="✏️ Update event", callback_data="update_event"),
             InlineKeyboardButton(text="🗑 Delete event", callback_data="delete_event"),
         )
+    b.row(InlineKeyboardButton(text="🎵 Концерты поблизости", callback_data="find_events"))
     cal_label = f"📆 {calendar_name}" if calendar_name else "📆 Select calendar"
     b.row(InlineKeyboardButton(text=cal_label, callback_data="select_calendar"))
     tz_label = f"🕐 {timezone}" if timezone else "🕐 Set timezone"

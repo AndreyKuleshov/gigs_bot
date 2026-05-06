@@ -100,9 +100,21 @@ def _events_location_kb() -> ReplyKeyboardMarkup:
     )
 
 
-@router.message(F.text == "🎵 Концерты")
-async def reply_events_button(message: Message) -> None:
-    await cmd_events(message)
+@router.callback_query(F.data == "find_events")
+async def cb_find_events(callback: CallbackQuery) -> None:
+    """Inline-menu button → same prompt as /events."""
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    await callback.message.answer(_EVENTS_PROMPT, reply_markup=_events_location_kb())
+    await callback.answer()
+
+
+_EVENTS_PROMPT = (
+    "🎵 Поделись локацией — найду концерты, фестивали и стендапы поблизости.\n\n"
+    "Если не хочешь делиться, напиши «концерты в <город> на выходных» — "
+    "AI-ассистент тоже умеет."
+)
 
 
 @router.message(Command("events"))
@@ -110,12 +122,7 @@ async def cmd_events(message: Message) -> None:
     """Ask the user to share their location, then look up events nearby."""
     if message.from_user is None:
         return
-    await message.answer(
-        "🎵 Поделись локацией — найду концерты, фестивали и стендапы поблизости.\n\n"
-        "Если не хочешь делиться, напиши «концерты в <город> на выходных» — "
-        "AI-ассистент тоже умеет.",
-        reply_markup=_events_location_kb(),
-    )
+    await message.answer(_EVENTS_PROMPT, reply_markup=_events_location_kb())
 
 
 @router.message(F.location)

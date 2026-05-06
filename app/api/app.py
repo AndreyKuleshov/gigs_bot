@@ -15,12 +15,23 @@ _webhook_tasks: set[asyncio.Task] = set()
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    from app.bot.setup import create_bot, create_dispatcher
+    from app.bot.setup import create_bot, create_dispatcher, setup_bot_commands
     from app.db.base import close_engine, create_tables
 
     await create_tables()
     bot = create_bot()
     dp = create_dispatcher()
+
+    # Register slash-command menu shown on "/" in Telegram. Best-effort: if
+    # Telegram is unreachable at boot, log and move on — bot still works.
+    try:
+        await setup_bot_commands(bot)
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "set_my_commands failed at startup: %s: %s", type(exc).__name__, exc
+        )
 
     app.state.bot = bot
     app.state.dp = dp
