@@ -4,7 +4,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.geocoding import _pick_locality, reverse_geocode_city
+from app.services.geocoding import (
+    _looks_like_subunit,
+    _pick_locality,
+    reverse_geocode_city,
+    reverse_geocode_locality,
+)
 
 # ── _pick_locality (pure function, no I/O) ────────────────────────────────────
 
@@ -91,3 +96,90 @@ async def test_reverse_geocode_swallows_network_error():
     with patch("httpx.AsyncClient", return_value=bad_client):
         out = await reverse_geocode_city(0, 0)
     assert out is None
+
+
+# ── _looks_like_subunit + zoom-fallback ──────────────────────────────────────
+
+
+def test_looks_like_subunit_district_and_municipality():
+    assert _looks_like_subunit("Stari Grad Urban Municipality") is True
+    assert _looks_like_subunit("Brooklyn Borough") is True
+    assert _looks_like_subunit("Belgrade") is False
+    assert _looks_like_subunit("Москва") is False
+
+
+@pytest.mark.asyncio
+async def test_locality_falls_back_to_wider_zoom_when_subunit():
+    """First lookup returns "Stari Grad Urban Municipality" — helper retries
+    and gets "Belgrade" from the wider zoom."""
+    payload_zoom10 = {
+        "address": {
+            "city": "Stari Grad Urban Municipality",
+            "country": "Serbia",
+        }
+    }
+    payload_zoom8 = {"address": {"city": "Belgrade", "country": "Serbia"}}
+
+    call_log: list[int] = []
+
+    def make_client(payload):
+        return _fake_async_client(payload)
+
+    def httpx_factory(*args, **kwargs):
+        # Match the order of get() invocations through call_log.
+        # The geocode helper opens AsyncClient twice: zoom=10, then zoom=8.
+        if not call_log:
+            call_log.append(10)
+            return make_client(payload_zoom10)
+        call_log.append(8)
+        return make_client(payload_zoom8)
+
+    with patch("httpx.AsyncClient", side_effect=httpx_factory):
+        locality, country = await reverse_geocode_locality(44.81, 20.46)
+    assert locality == "Belgrade"
+    assert country == "Serbia"
+    assert call_log == [10, 8]
+
+
+@pytest.mark.asyncio
+async def test_locality_does_not_retry_when_first_pick_is_clean():
+    """If zoom=10 already returns a real city, no second call is made."""
+    payload = {"address": {"city": "Belgrade", "country": "Serbia"}}
+    call_count = {"n": 0}
+
+    def httpx_factory(*args, **kwargs):
+        call_count["n"] += 1
+        return _fake_async_client(payload)
+
+    with patch("httpx.AsyncClient", side_effect=httpx_factory):
+        locality, country = await reverse_geocode_locality(44.81, 20.46)
+    assert locality == "Belgrade"
+    assert country == "Serbia"
+    assert call_count["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_locality_returns_subunit_when_wider_zoom_also_subunit():
+    """If both zooms return sub-unit names, keep the first one (best we got)."""
+    payload = {
+        "address": {
+            "city": "Some Urban Municipality",
+            "country": "Serbia",
+        }
+    }
+    with patch("httpx.AsyncClient", return_value=_fake_async_client(payload)):
+        locality, country = await reverse_geocode_locality(0, 0)
+    assert locality == "Some Urban Municipality"
+    assert country == "Serbia"
+
+
+@pytest.mark.asyncio
+async def test_locality_handles_first_call_failure():
+    """zoom=10 returns nothing → locality is None, no retry attempted."""
+    bad_client = MagicMock()
+    bad_client.__aenter__ = AsyncMock(side_effect=ConnectionError("net"))
+    bad_client.__aexit__ = AsyncMock(return_value=None)
+    with patch("httpx.AsyncClient", return_value=bad_client):
+        locality, country = await reverse_geocode_locality(0, 0)
+    assert locality is None
+    assert country is None

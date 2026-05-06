@@ -17,7 +17,7 @@ from aiogram.types import (
 from app.bot.keyboards import back_kb, main_menu_kb, menu_reply_kb, timezone_kb
 from app.bot.states import SetTimezoneFSM
 from app.services.auth_service import auth_service
-from app.services.geocoding import reverse_geocode_city
+from app.services.geocoding import reverse_geocode_locality
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ async def handle_location(message: Message, state: FSMContext) -> None:
     lon = message.location.longitude
     logger.info("Got location from user %d: %.4f, %.4f", user_id, lat, lon)
 
-    city = await reverse_geocode_city(lat, lon)
+    city, country = await reverse_geocode_locality(lat, lon)
     if not city:
         await message.answer(
             "⚠️ Не получилось определить город по координатам. "
@@ -137,8 +137,9 @@ async def handle_location(message: Message, state: FSMContext) -> None:
         )
         return
 
+    location_label = f"{city}, {country}" if country else city
     await message.answer(
-        f"📍 Локация: <b>{city}</b>. Ищу события на ближайшие выходные…",
+        f"📍 Локация: <b>{location_label}</b>. Ищу концерты в ближайшее время…",
         parse_mode="HTML",
         reply_markup=menu_reply_kb(),
     )
@@ -148,9 +149,10 @@ async def handle_location(message: Message, state: FSMContext) -> None:
     from app.bot.handlers.text_mode import _process_text
 
     prompt = (
-        f"Найди концерты, фестивали и стендап-события в городе {city} "
-        f"на ближайшие выходные. Дай 3–5 вариантов с датой, площадкой и "
-        f"ссылкой на билеты."
+        f"Найди концерты в {location_label} на ближайшие 3-4 недели. "
+        "Дай 3-5 вариантов с датой, площадкой и ссылкой на билеты. "
+        "Если данных по концертам мало, добавь крупные музыкальные фестивали "
+        "и стендап-события того же периода."
     )
     await _process_text(user_id, message, prompt, state)
 

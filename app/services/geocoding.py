@@ -19,6 +19,13 @@ _USER_AGENT = "gigs-bot/0.1 (https://github.com/AndreyKuleshov/gigs_bot)"
 _TIMEOUT = httpx.Timeout(10.0)
 
 
+# A "district / municipality / urban area" is usually a sub-unit of a real
+# city (e.g. "Stari Grad Urban Municipality" is the centre of Belgrade).
+# When pick returns one of those, retry the lookup with a wider zoom so
+# Nominatim aggregates up to the city level.
+_DISTRICT_MARKERS = ("district", "municipality", "urban area", "borough")
+
+
 def _pick_locality(addr: dict) -> str | None:
     """Choose the best human-readable place name from a Nominatim address dict.
 
@@ -33,13 +40,13 @@ def _pick_locality(addr: dict) -> str | None:
     return None
 
 
-async def reverse_geocode_city(lat: float, lon: float) -> str | None:
-    """Return a city-level place name for *lat*/*lon*, or ``None`` on failure.
+def _looks_like_subunit(name: str) -> bool:
+    lowered = name.lower()
+    return any(marker in lowered for marker in _DISTRICT_MARKERS)
 
-    Failure modes (network blip, Nominatim rate-limit, missing locality in
-    the response) all return ``None`` so callers can fall back to the
-    timezone-derived city.
-    """
+
+async def _query_nominatim(lat: float, lon: float, zoom: int) -> dict | None:
+    """One Nominatim reverse call. Returns the raw `address` dict or None."""
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.get(
@@ -48,20 +55,50 @@ async def reverse_geocode_city(lat: float, lon: float) -> str | None:
                     "lat": lat,
                     "lon": lon,
                     "format": "jsonv2",
-                    "zoom": 10,
+                    "zoom": zoom,
                     "addressdetails": 1,
                 },
                 headers={"User-Agent": _USER_AGENT, "Accept-Language": "en"},
             )
             resp.raise_for_status()
-            payload = resp.json()
+            return resp.json().get("address", {})
     except Exception as exc:
         logger.warning(
-            "reverse_geocode_city failed for %.4f,%.4f: %s: %s",
+            "Nominatim reverse failed (zoom=%d) for %.4f,%.4f: %s: %s",
+            zoom,
             lat,
             lon,
             type(exc).__name__,
             exc,
         )
         return None
-    return _pick_locality(payload.get("address", {}))
+
+
+async def reverse_geocode_locality(lat: float, lon: float) -> tuple[str | None, str | None]:
+    """Return (locality, country) for *lat*/*lon*. Either or both can be None.
+
+    Strategy: zoom=10 first; if the locality looks like a sub-unit of a
+    bigger city ("Stari Grad Urban Municipality" et al.), retry with
+    zoom=8 to aggregate up. The country field comes from whichever call
+    succeeded last.
+    """
+    addr = await _query_nominatim(lat, lon, zoom=10)
+    if addr is None:
+        return None, None
+    locality = _pick_locality(addr)
+    country = addr.get("country")
+
+    if locality and _looks_like_subunit(locality):
+        wider = await _query_nominatim(lat, lon, zoom=8)
+        if wider is not None:
+            wider_locality = _pick_locality(wider)
+            if wider_locality and not _looks_like_subunit(wider_locality):
+                locality = wider_locality
+                country = wider.get("country") or country
+    return locality, country
+
+
+async def reverse_geocode_city(lat: float, lon: float) -> str | None:
+    """Backwards-compatible wrapper: just return the city name."""
+    locality, _ = await reverse_geocode_locality(lat, lon)
+    return locality
