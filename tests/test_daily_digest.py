@@ -14,6 +14,12 @@ from app.services.reminder_service import _greeting, send_daily_digest_to_user
 TZ_NAME = "Europe/Belgrade"
 TZ = ZoneInfo(TZ_NAME)
 
+# Strict-window guard fires only when local hour == DAILY_DIGEST_HOUR.
+# Tests that want the gate to PASS use the current hour in TZ; tests that
+# want it to BLOCK use a different hour.
+PASS_HOUR = datetime.now(tz=TZ).hour
+BLOCK_HOUR = (PASS_HOUR + 1) % 24
+
 
 @pytest.fixture
 def mock_bot():
@@ -47,7 +53,7 @@ def deps():
 
 @pytest.mark.asyncio
 async def test_skips_before_digest_hour(deps, mock_bot):
-    deps.settings.daily_digest_hour = 25  # never passes
+    deps.settings.daily_digest_hour = BLOCK_HOUR
     sent = await send_daily_digest_to_user(mock_bot, user_id=1, tz_name=TZ_NAME, last_sent=None)
     assert sent is False
     mock_bot.send_message.assert_not_called()
@@ -55,7 +61,7 @@ async def test_skips_before_digest_hour(deps, mock_bot):
 
 @pytest.mark.asyncio
 async def test_skips_if_already_sent_today(deps, mock_bot):
-    deps.settings.daily_digest_hour = 0  # always past
+    deps.settings.daily_digest_hour = PASS_HOUR
     today_local = datetime.now(tz=TZ).date()
     sent = await send_daily_digest_to_user(
         mock_bot, user_id=1, tz_name=TZ_NAME, last_sent=today_local
@@ -66,7 +72,7 @@ async def test_skips_if_already_sent_today(deps, mock_bot):
 
 @pytest.mark.asyncio
 async def test_sends_when_gate_open_and_not_sent(deps, mock_bot):
-    deps.settings.daily_digest_hour = 0
+    deps.settings.daily_digest_hour = PASS_HOUR
     sent = await send_daily_digest_to_user(mock_bot, user_id=1, tz_name=TZ_NAME, last_sent=None)
     assert sent is True
     mock_bot.send_message.assert_awaited_once()
@@ -74,7 +80,7 @@ async def test_sends_when_gate_open_and_not_sent(deps, mock_bot):
 
 @pytest.mark.asyncio
 async def test_empty_events_sends_llm_generated_message(deps, mock_bot):
-    deps.settings.daily_digest_hour = 0
+    deps.settings.daily_digest_hour = PASS_HOUR
     deps.cal.list_events = AsyncMock(return_value=[])
     with patch(
         "app.services.reminder_service._generate_empty_day_message",
@@ -91,7 +97,7 @@ async def test_empty_events_sends_llm_generated_message(deps, mock_bot):
 async def test_empty_events_uses_static_fallback_when_llm_fails(deps, mock_bot):
     """If the LLM helper returns the static fallback (e.g. API down / no key),
     the bot still sends something sensible."""
-    deps.settings.daily_digest_hour = 0
+    deps.settings.daily_digest_hour = PASS_HOUR
     deps.cal.list_events = AsyncMock(return_value=[])
     from app.services.reminder_service import _EMPTY_DAY_FALLBACK
 
@@ -107,7 +113,7 @@ async def test_empty_events_uses_static_fallback_when_llm_fails(deps, mock_bot):
 
 @pytest.mark.asyncio
 async def test_non_empty_events_formats_list(deps, mock_bot):
-    deps.settings.daily_digest_hour = 0
+    deps.settings.daily_digest_hour = PASS_HOUR
     start = datetime(2026, 4, 23, 14, 0, tzinfo=TZ)
     end = datetime(2026, 4, 23, 15, 30, tzinfo=TZ)
     deps.cal.list_events = AsyncMock(
@@ -132,7 +138,7 @@ async def test_non_empty_events_formats_list(deps, mock_bot):
 
 @pytest.mark.asyncio
 async def test_force_bypasses_time_gate(deps, mock_bot):
-    deps.settings.daily_digest_hour = 25  # would block
+    deps.settings.daily_digest_hour = BLOCK_HOUR
     sent = await send_daily_digest_to_user(
         mock_bot, user_id=1, tz_name=TZ_NAME, force=True, last_sent=None
     )
@@ -142,7 +148,7 @@ async def test_force_bypasses_time_gate(deps, mock_bot):
 
 @pytest.mark.asyncio
 async def test_force_bypasses_dedup(deps, mock_bot):
-    deps.settings.daily_digest_hour = 0
+    deps.settings.daily_digest_hour = PASS_HOUR
     today_local = datetime.now(tz=TZ).date()
     sent = await send_daily_digest_to_user(
         mock_bot, user_id=1, tz_name=TZ_NAME, force=True, last_sent=today_local
@@ -153,7 +159,7 @@ async def test_force_bypasses_dedup(deps, mock_bot):
 
 @pytest.mark.asyncio
 async def test_updates_last_sent_date_on_success(deps, mock_bot):
-    deps.settings.daily_digest_hour = 0
+    deps.settings.daily_digest_hour = PASS_HOUR
     await send_daily_digest_to_user(mock_bot, user_id=42, tz_name=TZ_NAME, last_sent=None)
     # The UPDATE statement is executed once after a successful send.
     assert deps.session.execute.await_count == 1
@@ -189,7 +195,7 @@ class TestGreeting:
 
 @pytest.mark.asyncio
 async def test_greeting_prepended_in_events_message(deps, mock_bot):
-    deps.settings.daily_digest_hour = 0
+    deps.settings.daily_digest_hour = PASS_HOUR
     start = datetime(2026, 4, 23, 14, 0, tzinfo=TZ)
     end = datetime(2026, 4, 23, 15, 30, tzinfo=TZ)
     deps.cal.list_events = AsyncMock(
@@ -206,7 +212,7 @@ async def test_greeting_prepended_in_events_message(deps, mock_bot):
 
 @pytest.mark.asyncio
 async def test_greeting_prepended_in_empty_day_message(deps, mock_bot):
-    deps.settings.daily_digest_hour = 0
+    deps.settings.daily_digest_hour = PASS_HOUR
     deps.cal.list_events = AsyncMock(return_value=[])
     with patch(
         "app.services.reminder_service._generate_empty_day_message",
@@ -223,7 +229,7 @@ async def test_greeting_prepended_in_empty_day_message(deps, mock_bot):
 @pytest.mark.asyncio
 async def test_full_name_fallback_via_bot_get_chat(deps, mock_bot):
     """If User.full_name is None, fetch it from Telegram and persist."""
-    deps.settings.daily_digest_hour = 0
+    deps.settings.daily_digest_hour = PASS_HOUR
     deps.cal.list_events = AsyncMock(return_value=[])
     mock_bot.get_chat = AsyncMock(return_value=SimpleNamespace(full_name="Andrei G"))
     with patch(
@@ -241,7 +247,7 @@ async def test_full_name_fallback_via_bot_get_chat(deps, mock_bot):
 @pytest.mark.asyncio
 async def test_full_name_fallback_tolerates_get_chat_failure(deps, mock_bot):
     """If bot.get_chat raises, digest still goes out — just without a name."""
-    deps.settings.daily_digest_hour = 0
+    deps.settings.daily_digest_hour = PASS_HOUR
     deps.cal.list_events = AsyncMock(return_value=[])
     mock_bot.get_chat = AsyncMock(side_effect=RuntimeError("blocked"))
     with patch(
@@ -261,7 +267,7 @@ async def test_send_failure_still_marks_day_and_returns_false(deps, mock_bot):
     """If bot.send_message fails (user blocked the bot, network blip), we must
     still bump last_daily_sent_date so the scheduler doesn't retry every 60s.
     Returns False to signal non-delivery."""
-    deps.settings.daily_digest_hour = 0
+    deps.settings.daily_digest_hour = PASS_HOUR
     deps.cal.list_events = AsyncMock(return_value=[])
     mock_bot.send_message = AsyncMock(side_effect=RuntimeError("Forbidden: bot was blocked"))
     with patch(
@@ -278,7 +284,7 @@ async def test_send_failure_still_marks_day_and_returns_false(deps, mock_bot):
 
 @pytest.mark.asyncio
 async def test_no_send_when_credentials_missing(deps, mock_bot):
-    deps.settings.daily_digest_hour = 0
+    deps.settings.daily_digest_hour = PASS_HOUR
     deps.auth.get_credentials = AsyncMock(return_value=None)
     sent = await send_daily_digest_to_user(mock_bot, user_id=1, tz_name=TZ_NAME, last_sent=None)
     assert sent is False

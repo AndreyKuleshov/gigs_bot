@@ -225,7 +225,12 @@ async def send_daily_digest_to_user(
     today_local = now.date()
 
     if not force:
-        if now.hour < settings.daily_digest_hour:
+        # Strict-window send: only fire during the user's local DAILY_DIGEST_HOUR.
+        # If the scheduler was down through that hour (deploy, restart, …) the
+        # user just doesn't get a digest today; tomorrow's tick is fine.
+        # Better than "send whenever the bot wakes up" which produced 11:00
+        # digests after morning redeploys.
+        if now.hour != settings.daily_digest_hour:
             return False
         if last_sent == today_local:
             return False

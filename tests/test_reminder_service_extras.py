@@ -1,8 +1,10 @@
 """Reach the last few uncovered branches in reminder_service."""
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from google.auth.exceptions import RefreshError
@@ -15,6 +17,7 @@ from app.services.reminder_service import (
 )
 
 TZ_NAME = "Europe/Belgrade"
+PASS_HOUR = datetime.now(tz=ZoneInfo(TZ_NAME)).hour
 
 
 # ── _is_auth_failure ─────────────────────────────────────────────────────────
@@ -121,7 +124,7 @@ def deps():
         auth.get_calendar_id = AsyncMock(return_value="primary")
         auth.revoke_tokens = AsyncMock()
         cal.list_events = AsyncMock(return_value=[])
-        settings_mock.daily_digest_hour = 0
+        settings_mock.daily_digest_hour = PASS_HOUR
         yield SimpleNamespace(auth=auth, cal=cal)
 
 
