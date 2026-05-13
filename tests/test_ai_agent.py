@@ -401,3 +401,67 @@ class TestRunCalendarTool:
         kwargs = cal.list_events.await_args.kwargs
         assert kwargs["time_min"] is not None
         assert kwargs["time_max"] is not None
+
+    @pytest.mark.asyncio
+    async def test_create_event_all_day_inclusive_end(self, agent):
+        """Tool contract: end_date is the INCLUSIVE last day. The Python layer
+        must add +1 day before handing to Google (whose end is exclusive).
+        'с 18 по 21 июня' → end_date arg 2026-06-21 → Google end_date 2026-06-22.
+        """
+        from datetime import date
+
+        with (
+            patch("app.services.ai_agent.auth_service") as auth,
+            patch("app.services.ai_agent.calendar_service") as cal,
+        ):
+            auth.get_credentials = AsyncMock(return_value=object())
+            auth.get_calendar_id = AsyncMock(return_value="primary")
+            auth.get_user_timezone = AsyncMock(return_value="Europe/Belgrade")
+            created_stub = type("E", (), {"summary": "Поездка в Тиват", "event_id": "abc"})()
+            cal.create_event = AsyncMock(return_value=created_stub)
+
+            await agent._run_calendar_tool(
+                user_id=1,
+                name="create_event",
+                args={
+                    "summary": "Поездка в Тиват",
+                    "start_date": "2026-06-18",
+                    "end_date": "2026-06-21",
+                },
+            )
+
+        assert cal.create_event.await_args is not None
+        ev = cal.create_event.await_args.args[1]
+        assert ev.start_date == date(2026, 6, 18)
+        # Inclusive 21 → exclusive 22 for Google Calendar.
+        assert ev.end_date == date(2026, 6, 22)
+
+    @pytest.mark.asyncio
+    async def test_update_event_all_day_inclusive_end(self, agent):
+        """Same +1 conversion must apply to update_event."""
+        from datetime import date
+
+        with (
+            patch("app.services.ai_agent.auth_service") as auth,
+            patch("app.services.ai_agent.calendar_service") as cal,
+        ):
+            auth.get_credentials = AsyncMock(return_value=object())
+            auth.get_calendar_id = AsyncMock(return_value="primary")
+            auth.get_user_timezone = AsyncMock(return_value="Europe/Belgrade")
+            updated_stub = type("E", (), {"summary": "Поездка"})()
+            cal.update_event = AsyncMock(return_value=updated_stub)
+
+            await agent._run_calendar_tool(
+                user_id=1,
+                name="update_event",
+                args={
+                    "event_id": "abc",
+                    "start_date": "2026-06-18",
+                    "end_date": "2026-06-21",
+                },
+            )
+
+        assert cal.update_event.await_args is not None
+        ev = cal.update_event.await_args.args[1]
+        assert ev.start_date == date(2026, 6, 18)
+        assert ev.end_date == date(2026, 6, 22)

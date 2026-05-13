@@ -134,6 +134,12 @@ _SYSTEM_PROMPT = (
     "to resolve time_min/time_max, THEN call read_events with those bounds. "
     "Do NOT compute weekend/week dates yourself — always use get_date_range.\n"
     "- When creating events, always ask for both start and end times if not given.\n"
+    "- ALL-DAY / MULTI-DAY EVENTS: when the user says 'с X по Y', 'X-Y июня', "
+    "'from X through Y', 'X to Y inclusive', etc., set start_date=X and "
+    "end_date=Y (the LITERAL last day). DO NOT shift end_date by +1; the "
+    "server converts to Google Calendar's exclusive end internally. "
+    "Example: 'поездка с 18 по 21 июня 2026' → start_date=2026-06-18, "
+    "end_date=2026-06-21 (not 2026-06-22).\n"
     "- LANGUAGE RULE: You MUST reply in {language}. Every single word of your response "
     "must be in {language}. NEVER use Serbian, even if location data is in Serbian. "
     "Translate ALL foreign text (addresses, venue names, search results) into {language}. "
@@ -322,8 +328,13 @@ _TOOLS: list[dict] = [
                     "end_date": {
                         "type": "string",
                         "description": (
-                            "End date YYYY-MM-DD (exclusive — day AFTER the last day). "
-                            "For all-day/multi-day events."
+                            "End date YYYY-MM-DD — the LAST day of the event "
+                            "(INCLUSIVE). Just copy the date the user said. "
+                            "Examples: 'с 18 по 21 июня 2026' / 'June 18 through 21, "
+                            "2026' → end_date=2026-06-21. Single all-day event on "
+                            "Apr 5 → start_date=end_date=2026-04-05. "
+                            "DO NOT add +1 day — the server handles the Google "
+                            "Calendar exclusive-end conversion internally."
                         ),
                     },
                     "description": {
@@ -361,7 +372,11 @@ _TOOLS: list[dict] = [
                     },
                     "end_date": {
                         "type": "string",
-                        "description": "New end date YYYY-MM-DD exclusive (all-day).",
+                        "description": (
+                            "New end date YYYY-MM-DD — LAST day of the event "
+                            "(INCLUSIVE). DO NOT add +1 day; the server handles "
+                            "the Google Calendar exclusive-end conversion."
+                        ),
                     },
                     "description": {"type": "string", "description": "New description."},
                     "location": {"type": "string", "description": "New location."},
@@ -750,6 +765,11 @@ class AIAgent:
             if name == "create_event":
                 start = _fix_tz(args["start_time"]) if args.get("start_time") else None
                 end = _fix_end(start, _fix_tz(args["end_time"]) if args.get("end_time") else None)
+                # Tool contract: end_date is the INCLUSIVE last day. Google
+                # Calendar wants an exclusive end, so add +1 day here.
+                end_d_inclusive = (
+                    date.fromisoformat(args["end_date"]) if args.get("end_date") else None
+                )
                 ev = EventCreate(
                     summary=args["summary"],
                     start=start,
@@ -757,9 +777,7 @@ class AIAgent:
                     start_date=(
                         date.fromisoformat(args["start_date"]) if args.get("start_date") else None
                     ),
-                    end_date=(
-                        date.fromisoformat(args["end_date"]) if args.get("end_date") else None
-                    ),
+                    end_date=(end_d_inclusive + timedelta(days=1) if end_d_inclusive else None),
                     description=args.get("description"),
                     location=args.get("location"),
                 )
@@ -773,6 +791,10 @@ class AIAgent:
                 u_end = _fix_end(
                     u_start, _fix_tz(args["end_time"]) if args.get("end_time") else None
                 )
+                # Tool contract: end_date is INCLUSIVE; Google needs exclusive.
+                u_end_d_inclusive = (
+                    date.fromisoformat(args["end_date"]) if args.get("end_date") else None
+                )
                 up = EventUpdate(
                     event_id=args["event_id"],
                     summary=args.get("summary"),
@@ -781,9 +803,7 @@ class AIAgent:
                     start_date=(
                         date.fromisoformat(args["start_date"]) if args.get("start_date") else None
                     ),
-                    end_date=(
-                        date.fromisoformat(args["end_date"]) if args.get("end_date") else None
-                    ),
+                    end_date=(u_end_d_inclusive + timedelta(days=1) if u_end_d_inclusive else None),
                     description=args.get("description"),
                     location=args.get("location"),
                 )
