@@ -232,6 +232,10 @@ async def send_daily_digest_to_user(
         # digests after morning redeploys.
         if now.hour != settings.daily_digest_hour:
             return False
+        # On the weekly-digest day, suppress the daily so the user gets just
+        # one Monday morning message (weekly) instead of two.
+        if settings.weekly_digest_enabled and today_local.weekday() == settings.weekly_digest_dow:
+            return False
         if last_sent == today_local:
             return False
 

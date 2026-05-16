@@ -79,6 +79,29 @@ async def test_sends_when_gate_open_and_not_sent(deps, mock_bot):
 
 
 @pytest.mark.asyncio
+async def test_suppressed_on_weekly_digest_day(deps, mock_bot):
+    """If weekly digest is enabled and today is its DOW, daily must NOT
+    fire — otherwise the user would get two morning messages on Mondays."""
+    deps.settings.daily_digest_hour = PASS_HOUR
+    deps.settings.weekly_digest_enabled = True
+    deps.settings.weekly_digest_dow = datetime.now(tz=TZ).weekday()  # = today
+    sent = await send_daily_digest_to_user(mock_bot, user_id=1, tz_name=TZ_NAME, last_sent=None)
+    assert sent is False
+    mock_bot.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_not_suppressed_when_weekly_disabled(deps, mock_bot):
+    """Daily must still fire on the weekly DOW if weekly is disabled."""
+    deps.settings.daily_digest_hour = PASS_HOUR
+    deps.settings.weekly_digest_enabled = False
+    deps.settings.weekly_digest_dow = datetime.now(tz=TZ).weekday()
+    sent = await send_daily_digest_to_user(mock_bot, user_id=1, tz_name=TZ_NAME, last_sent=None)
+    assert sent is True
+    mock_bot.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_empty_events_sends_llm_generated_message(deps, mock_bot):
     deps.settings.daily_digest_hour = PASS_HOUR
     deps.cal.list_events = AsyncMock(return_value=[])
