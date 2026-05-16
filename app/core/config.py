@@ -56,13 +56,19 @@ class Settings(BaseSettings):
 
     # Weekly digest: on WEEKLY_DIGEST_DOW (0=Mon..6=Sun) at WEEKLY_DIGEST_HOUR
     # local time per user, the bot sends the events of the current Mon–Sun
-    # week. Same hourly-cron + dedup pattern as the daily digest, but the
-    # idempotency key is the Monday-date of the week we sent for
-    # (User.last_weekly_sent_monday).
+    # week. Same dedup pattern as daily, but the idempotency key is the
+    # Monday-date of the week we sent for (User.last_weekly_sent_monday).
+    #
+    # WEEKLY_DIGEST_CRON default fires every hour on Mondays UTC. With
+    # HOUR=9 this covers tz offsets in [UTC-12, UTC+9] — basically everywhere
+    # except far-east Asia/Pacific (Sydney UTC+10, Tokyo +9 is the edge,
+    # Auckland +12/+13, Kiritimati +14). For those, their local Mon 9:00
+    # is Sun UTC and this cron misses them — loosen to "0 * * * *" (any day,
+    # hourly) if you need them covered.
     weekly_digest_enabled: bool = False
     weekly_digest_hour: int = 9
     weekly_digest_dow: int = 0  # Monday
-    weekly_digest_cron: str = "0 * * * *"
+    weekly_digest_cron: str = "0 * * * 1"
 
     # Free-text debounce: when the user sends several messages in quick
     # succession, hold them for this many seconds, then merge into one
