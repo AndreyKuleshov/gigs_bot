@@ -36,6 +36,10 @@ class User(Base):
     # Guards against double-sending from the ~60s scheduler tick.
     last_daily_sent_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
+    # Monday-date of the week the weekly digest was last sent for (user-local tz).
+    # Used by the weekly-digest scheduler to dedup within the same Mon–Sun week.
+    last_weekly_sent_monday: Mapped[date | None] = mapped_column(Date, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

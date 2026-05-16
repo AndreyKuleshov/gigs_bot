@@ -8,7 +8,11 @@ from aiogram import Bot
 from croniter import croniter
 
 from app.core.config import settings
-from app.services.reminder_service import send_reminders, tick_daily_digests
+from app.services.reminder_service import (
+    send_reminders,
+    tick_daily_digests,
+    tick_weekly_digests,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,3 +74,35 @@ async def start_daily_digest_scheduler(bot: Bot) -> None:
                 logger.info("Daily digest sent to %d user(s)", sent)
         except Exception as exc:
             logger.warning("Daily digest tick failed: %s: %s", type(exc).__name__, exc)
+
+
+async def start_weekly_digest_scheduler(bot: Bot) -> None:
+    """Cron-driven weekly digest tick. Per-user idempotency is guarded by
+    ``User.last_weekly_sent_monday``, so the cron can fire often without
+    double-sending.
+
+    Blocks forever; meant to be launched as a background task. Returns
+    immediately if ``WEEKLY_DIGEST_CRON`` is empty.
+    """
+    cron_expr = settings.weekly_digest_cron
+    if not cron_expr:
+        logger.info("WEEKLY_DIGEST_CRON not set — weekly digest disabled")
+        return
+    logger.info(
+        "Weekly digest scheduler started (cron: %s, dow=%d hour=%d local)",
+        cron_expr,
+        settings.weekly_digest_dow,
+        settings.weekly_digest_hour,
+    )
+    cron = croniter(cron_expr, datetime.now(tz=UTC))
+    while True:
+        next_run = cron.get_next(datetime)
+        delay = (next_run - datetime.now(tz=UTC)).total_seconds()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        try:
+            sent = await tick_weekly_digests(bot)
+            if sent:
+                logger.info("Weekly digest sent to %d user(s)", sent)
+        except Exception as exc:
+            logger.warning("Weekly digest tick failed: %s: %s", type(exc).__name__, exc)

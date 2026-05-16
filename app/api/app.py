@@ -54,12 +54,20 @@ async def _lifespan(app: FastAPI):
 
         app.state.daily_digest_task = asyncio.create_task(start_daily_digest_scheduler(bot))
 
+    # Weekly digest scheduler — cron-driven per WEEKLY_DIGEST_CRON.
+    if settings.weekly_digest_enabled:
+        from app.bot.scheduler import start_weekly_digest_scheduler
+
+        app.state.weekly_digest_task = asyncio.create_task(start_weekly_digest_scheduler(bot))
+
     yield
 
     if hasattr(app.state, "scheduler_task"):
         app.state.scheduler_task.cancel()
     if hasattr(app.state, "daily_digest_task"):
         app.state.daily_digest_task.cancel()
+    if hasattr(app.state, "weekly_digest_task"):
+        app.state.weekly_digest_task.cancel()
     if not settings.webhook_url:
         app.state.polling_task.cancel()
 

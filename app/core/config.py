@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     daily_digest_hour: int = 9
     daily_digest_cron: str = "0 * * * *"
 
+    # Weekly digest: on WEEKLY_DIGEST_DOW (0=Mon..6=Sun) at WEEKLY_DIGEST_HOUR
+    # local time per user, the bot sends the events of the current Mon–Sun
+    # week. Same hourly-cron + dedup pattern as the daily digest, but the
+    # idempotency key is the Monday-date of the week we sent for
+    # (User.last_weekly_sent_monday).
+    weekly_digest_enabled: bool = False
+    weekly_digest_hour: int = 9
+    weekly_digest_dow: int = 0  # Monday
+    weekly_digest_cron: str = "0 * * * *"
+
     # Free-text debounce: when the user sends several messages in quick
     # succession, hold them for this many seconds, then merge into one
     # request to the AI agent. Set to 0 to disable.
