@@ -94,6 +94,48 @@ def create_app() -> FastAPI:
     async def health() -> dict:
         return {"status": "ok"}
 
+    @app.post("/internal/tick-weekly", tags=["ops"])
+    async def tick_weekly(request: Request, user_id: int, force: bool = True) -> dict:
+        """Manually trigger the weekly digest for one user.
+
+        Gated by ``INTERNAL_API_TOKEN`` (Authorization: Bearer …). With the
+        default ``force=true``, sends immediately regardless of dow / hour /
+        dedup. Set ``force=false`` to instead obey the normal gates (useful
+        if the scheduler missed a tick).
+        """
+        if not settings.internal_api_token:
+            raise HTTPException(status_code=403, detail="internal API disabled")
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {settings.internal_api_token}":
+            raise HTTPException(status_code=403, detail="invalid token")
+
+        from sqlalchemy import select
+
+        from app.db.base import get_session
+        from app.db.models import User
+        from app.services.reminder_service import send_weekly_digest_to_user
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(User.timezone, User.full_name, User.last_weekly_sent_monday).where(
+                    User.id == user_id
+                )
+            )
+            row = result.one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="user not found")
+        tz_name, full_name, last_sent_monday = row
+
+        sent = await send_weekly_digest_to_user(
+            request.app.state.bot,
+            user_id,
+            tz_name or "UTC",
+            force=force,
+            last_sent_monday=last_sent_monday,
+            full_name=full_name,
+        )
+        return {"sent": sent}
+
     @app.post("/webhook/telegram", tags=["ops"])
     async def telegram_webhook(request: Request) -> dict:
         if settings.webhook_secret:
