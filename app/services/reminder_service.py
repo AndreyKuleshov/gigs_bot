@@ -400,31 +400,29 @@ async def send_weekly_digest_to_user(
         full_name = await _fetch_and_persist_full_name(bot, user_id)
     greeting = _greeting(full_name, now.hour)
 
-    if events:
-        # Group events by their local date so we can render one section per day.
-        by_day: dict[date, list] = {}
-        for e in events:
-            d = e.start.astimezone(tz).date()
-            by_day.setdefault(d, []).append(e)
-        lines = [greeting, "", "📅 <b>События на этой неделе:</b>"]
-        for i in range(7):
-            day = week_monday + timedelta(days=i)
-            if day not in by_day:
-                continue
-            lines.append(f"\n<b>{_WEEKDAY_NAMES_RU[i]}, {day.strftime('%d.%m')}</b>")
-            for e in by_day[day]:
-                start_local = e.start.astimezone(tz)
-                end_local = e.end.astimezone(tz)
-                line = (
-                    f"• <b>{e.summary}</b>  "
-                    f"🕐 {start_local.strftime('%H:%M')}–{end_local.strftime('%H:%M')}"
-                )
-                if e.location:
-                    line += f"\n  📍 {e.location}"
-                lines.append(line)
-        text = "\n".join(lines)
-    else:
-        text = f"{greeting}\n\n📅 <b>На этой неделе ничего не запланировано.</b>"
+    # Group events by their local date so we can render one section per day.
+    by_day: dict[date, list] = {}
+    for e in events:
+        d = e.start.astimezone(tz).date()
+        by_day.setdefault(d, []).append(e)
+    lines = [greeting, "", "📅 <b>События на этой неделе:</b>"]
+    for i in range(7):
+        day = week_monday + timedelta(days=i)
+        lines.append(f"\n<b>{_WEEKDAY_NAMES_RU[i]}, {day.strftime('%d.%m')}</b>")
+        if day not in by_day:
+            lines.append("• <i>ничего не запланировано</i>")
+            continue
+        for e in by_day[day]:
+            start_local = e.start.astimezone(tz)
+            end_local = e.end.astimezone(tz)
+            line = (
+                f"• <b>{e.summary}</b>  "
+                f"🕐 {start_local.strftime('%H:%M')}–{end_local.strftime('%H:%M')}"
+            )
+            if e.location:
+                line += f"\n  📍 {e.location}"
+            lines.append(line)
+    text = "\n".join(lines)
 
     delivered = False
     try:

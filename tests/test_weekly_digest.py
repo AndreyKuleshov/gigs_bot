@@ -92,12 +92,48 @@ async def test_sends_when_gate_open_and_not_sent(deps, mock_bot):
 
 
 @pytest.mark.asyncio
-async def test_empty_week_says_nothing_planned(deps, mock_bot):
+async def test_empty_week_lists_all_seven_days_with_placeholder(deps, mock_bot):
+    """No events at all — output still lists every weekday with a placeholder."""
     deps.cal.list_events = AsyncMock(return_value=[])
     await send_weekly_digest_to_user(mock_bot, user_id=1, tz_name=TZ_NAME, last_sent_monday=None)
     args, _ = mock_bot.send_message.await_args
     body = args[1]
+    for day_name in [
+        "Понедельник",
+        "Вторник",
+        "Среда",
+        "Четверг",
+        "Пятница",
+        "Суббота",
+        "Воскресенье",
+    ]:
+        assert day_name in body
+    # Placeholder must appear at least once (in practice 7×, but ≥1 is the contract).
     assert "ничего не запланировано" in body.lower()
+
+
+@pytest.mark.asyncio
+async def test_partial_week_fills_empty_days_with_placeholder(deps, mock_bot):
+    """Days without events show the placeholder; days with events show the list."""
+    mon = CURRENT_MONDAY
+    events = [
+        EventRead(
+            event_id="a",
+            summary="Standup",
+            start=datetime(mon.year, mon.month, mon.day, 10, 0, tzinfo=TZ),
+            end=datetime(mon.year, mon.month, mon.day, 10, 30, tzinfo=TZ),
+            location=None,
+        ),
+    ]
+    deps.cal.list_events = AsyncMock(return_value=events)
+    await send_weekly_digest_to_user(mock_bot, user_id=1, tz_name=TZ_NAME, last_sent_monday=None)
+    args, _ = mock_bot.send_message.await_args
+    body = args[1]
+    # Monday has the event — no placeholder line right after the Monday header.
+    # Other days have the placeholder.
+    assert "Standup" in body
+    # 6 days without events → 6 placeholder lines.
+    assert body.lower().count("ничего не запланировано") == 6
 
 
 @pytest.mark.asyncio
