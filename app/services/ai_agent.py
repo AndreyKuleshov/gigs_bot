@@ -95,6 +95,25 @@ def _city_from_tz(tz_name: str) -> str:
     return last.replace("_", " ")
 
 
+_REGIONAL_SOURCES: dict[str, list[str]] = {
+    "Europe/Belgrade": ["gigstix.com", "eventim.rs", "tickets.rs"],
+}
+
+
+def _regional_sources_str(tz_name: str) -> str:
+    """Human-readable list of regional ticket sites for the user's tz.
+
+    Returned string is interpolated into the system prompt to nudge the model
+    toward local promoters that the global aggregators (Bandsintown, Songkick,
+    Ticketmaster, RA) miss — e.g. Serbian shows are routinely listed only on
+    gigstix.com / eventim.rs / tickets.rs.
+    """
+    sources = _REGIONAL_SOURCES.get(tz_name, [])
+    if not sources:
+        return "(none configured — rely on the global sources below)"
+    return ", ".join(sources)
+
+
 def _detect_language(text: str) -> str:
     """Detect language from user message. Simple heuristic based on character ranges."""
     cyrillic = sum(1 for c in text if "\u0400" <= c <= "\u04ff")
@@ -177,13 +196,19 @@ _SYSTEM_PROMPT = (
     "the web for the <X> concert in {city}?'. Then STOP and wait for the user's "
     "next message — do not call any tool in this turn.\n"
     "  4. Only AFTER the user confirms in a follow-up turn (e.g. 'да', 'давай', "
-    "'yes', 'sure'), run web_search with an English query that includes {city} "
-    "(and fetch_url on any listing URL — see the event-discovery rules). If a "
-    "concrete date in the user's region is found, call create_event with the "
-    "found date / venue / details so the confirmation system can ask the user to "
-    "approve via buttons. If nothing relevant turns up in {city}, say so honestly "
-    "(e.g. «В {city} анонсов концерта <X> не нашёл»). Do NOT propose events from "
-    "other cities/countries.\n"
+    "'yes', 'sure'), run web_search with an English query that includes {city}. "
+    "Then MANDATORY: call fetch_url on the most promising per-event URL "
+    "(bandsintown.com, gigstix.com, eventim.rs, songkick.com, ticketmaster.com, "
+    "ra.co, venue site, etc.) and read the actual page to extract the concrete "
+    "date / venue. NEVER report a date, tour name, or venue based on the search "
+    "snippet alone — snippets routinely contain old tour info or shows from other "
+    "cities, and the model must not invent details. If fetch_url does not yield "
+    "a verifiable date for {city}, say so honestly (e.g. «В {city} подтверждённых "
+    "анонсов концерта <X> не нашёл») — do NOT fabricate a date, tour name, or "
+    "venue, and do NOT propose events from other cities/countries. Only if a "
+    "concrete date IS verified from the fetched page, call create_event with the "
+    "verified date / venue / details so the confirmation system can ask the user "
+    "to approve via buttons.\n"
     "- When the user asks to FIND INFORMATION about something (e.g. 'найди информацию', "
     "'find info about'), ALWAYS do ALL of these steps:\n"
     "  1. Call read_events to find the event in the calendar.\n"
@@ -216,18 +241,31 @@ _SYSTEM_PROMPT = (
     "range, and event-type keywords. Examples: "
     "'concerts in {city} this weekend tickets', "
     "'stand-up comedy {city} April 25 26 2026', "
-    "'parties events {city} {timezone} Saturday'. "
-    "Run AT LEAST ONE follow-up search restricted to a specialised event "
-    "source — e.g. 'concerts {city} site:songkick.com', "
-    "'site:bandsintown.com {city}', 'site:ticketmaster.com {city} concerts', "
-    "'site:ra.co {city}' (electronic / club nights). These usually give "
-    "more reliable dates and ticket links than generic web pages.\n"
+    "'parties events {city} {timezone} Saturday'.\n"
+    "  2a. PRIORITY SOURCES — run follow-up searches in this order, stopping "
+    "once you have enough dated options:\n"
+    "    (1) BANDSINTOWN FIRST (best coverage for rock / metal / metalcore / "
+    "hip-hop). Try multiple genre-scoped queries: "
+    "'site:bandsintown.com {city} rock', "
+    "'site:bandsintown.com {city} metal', "
+    "'site:bandsintown.com {city} metalcore', "
+    "'site:bandsintown.com {city} hip-hop'. If the user asked for a specific "
+    "genre, use only the matching query; otherwise run all four.\n"
+    "    (2) REGIONAL TICKETING for {city} — often the ONLY place local "
+    "promoters list shows that global aggregators miss: {regional_sources}. "
+    "Query as 'site:<source> {city}' or 'site:<source> <artist or date>'.\n"
+    "    (3) THEN the other global specialised sources: "
+    "'concerts {city} site:songkick.com', "
+    "'site:ticketmaster.com {city} concerts', "
+    "'site:ra.co {city}' (electronic / club nights).\n"
+    "  These specialised sources give more reliable dates and ticket links "
+    "than generic web pages.\n"
     "  2b. CRITICAL — search snippets often DON'T contain real event dates. "
     "When you get a URL from a listing site (bandsintown.com/c/<city>, "
-    "songkick.com/metro-areas/..., ticketmaster.com pages, ra.co/events/..., "
-    "venue homepages), call fetch_url on it and read the actual page "
-    "content for concrete event names + dates. Don't fabricate an event "
-    "from just a URL slug.\n"
+    "gigstix.com/event/..., eventim.rs/..., songkick.com/metro-areas/..., "
+    "ticketmaster.com pages, ra.co/events/..., venue homepages), call "
+    "fetch_url on it and read the actual page content for concrete event "
+    "names + dates. Don't fabricate an event from just a URL slug.\n"
     "  2c. STRICT FILTER — every option you present MUST include a CONCRETE "
     "DATE (day + month + year, or at least day + month). If you cannot "
     "extract a real date, DROP that option — do NOT write 'дата не указана' "
@@ -470,11 +508,12 @@ _TOOLS: list[dict] = [
             "description": (
                 "Download the readable text content of a web page. Use this AFTER "
                 "web_search returned a URL to a specialised event database "
-                "(songkick.com, bandsintown.com, ticketmaster.com, ra.co, "
-                "venue site, etc.) so you can extract real event names + dates "
-                "from the listing instead of guessing from the search snippet. "
-                "Returns up to ~3500 characters of stripped text. If you need a "
-                "second page, call fetch_url again with the next URL."
+                "(bandsintown.com, gigstix.com, eventim.rs, songkick.com, "
+                "ticketmaster.com, ra.co, venue site, etc.) so you can extract "
+                "real event names + dates from the listing instead of guessing "
+                "from the search snippet. Returns up to ~3500 characters of "
+                "stripped text. If you need a second page, call fetch_url again "
+                "with the next URL."
             ),
             "parameters": {
                 "type": "object",
@@ -861,6 +900,7 @@ class AIAgent:
             timezone=user_tz,
             city=_city_from_tz(user_tz),
             language=language,
+            regional_sources=_regional_sources_str(user_tz),
         )
         history = self._get_history(user_id)
         messages: list[ChatCompletionMessageParam] = [

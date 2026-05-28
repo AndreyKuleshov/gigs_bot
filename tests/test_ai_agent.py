@@ -169,9 +169,12 @@ class TestSystemPromptRendering:
             timezone="Europe/Belgrade",
             city="Belgrade",
             language="Russian",
+            regional_sources="gigstix.com, eventim.rs, tickets.rs",
         )
         assert "Belgrade" in rendered
         assert "куда сходить" in rendered or "EVENT DISCOVERY" in rendered
+        assert "gigstix.com" in rendered
+        assert "BANDSINTOWN FIRST" in rendered
 
 
 class TestDetectLanguage:
