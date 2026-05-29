@@ -650,8 +650,13 @@ async def _fetch_url(url: str) -> str:
     if not url.lower().startswith(("http://", "https://")):
         return f"Error: invalid URL: {url}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; gigs-bot/1.0; +https://t.me/)",
-        "Accept-Language": "en,ru;q=0.7",
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/123.0.0.0 Safari/537.36"
+        ),
+        "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"),
+        "Accept-Language": "en-US,en;q=0.9,ru;q=0.7",
     }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(15.0), follow_redirects=True) as c:
@@ -744,6 +749,37 @@ def _extract_candidate_urls(search_result: str) -> list[str]:
     return urls
 
 
+def _host_key(url: str) -> str:
+    """Return a normalised hostname for grouping URLs by source."""
+    from urllib.parse import urlparse
+
+    host = urlparse(url).netloc.lower()
+    return host.removeprefix("www.").removeprefix("new.")
+
+
+def _interleave_by_host(urls: list[str]) -> list[str]:
+    """Round-robin URLs so each hostname contributes one URL before any
+    hostname contributes its second. Prevents a single dominant source
+    (e.g. bandsintown's 5 genre searches) from monopolising the fetch budget,
+    so smaller-but-critical regional sources still get a fetch attempt even
+    if the dominant source ends up 403-ing us anyway.
+    """
+    buckets: dict[str, list[str]] = {}
+    order: list[str] = []
+    for u in urls:
+        h = _host_key(u)
+        if h not in buckets:
+            buckets[h] = []
+            order.append(h)
+        buckets[h].append(u)
+    out: list[str] = []
+    while any(buckets[h] for h in order):
+        for h in order:
+            if buckets[h]:
+                out.append(buckets[h].pop(0))
+    return out
+
+
 async def _discover_local_events(
     city: str,
     tz_name: str,
@@ -804,11 +840,14 @@ async def _discover_local_events(
             "you couldn't find verifiable listings — do NOT fabricate events."
         )
 
-    top_urls = candidate_urls[:_DISCOVER_FETCH_CAP]
+    interleaved = _interleave_by_host(candidate_urls)
+    top_urls = interleaved[:_DISCOVER_FETCH_CAP]
     logger.info(
-        "discover_local_events: %d candidates, fetching %d",
+        "discover_local_events: %d candidates across %d hosts, fetching %d: %s",
         len(candidate_urls),
+        len({_host_key(u) for u in candidate_urls}),
         len(top_urls),
+        top_urls,
     )
     fetched = await asyncio.gather(
         *[_fetch_url(u) for u in top_urls],

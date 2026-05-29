@@ -17,6 +17,7 @@ from app.services.ai_agent import (
     _extract_candidate_urls,
     _fetch_url,
     _find_event_image,
+    _interleave_by_host,
     _web_search,
     ai_agent,
 )
@@ -359,6 +360,34 @@ def test_extract_candidate_urls_keeps_whitelisted_event_sites():
 
 def test_extract_candidate_urls_returns_empty_on_no_matches():
     assert _extract_candidate_urls("just some text\nhttps://example.com\nfoo") == []
+
+
+def test_interleave_by_host_round_robins_dominant_source():
+    """When one host (e.g. bandsintown) dominates candidates, interleaving
+    must give smaller sources a slot in the top-N so they aren't starved."""
+    urls = [
+        "https://www.bandsintown.com/e/1",
+        "https://www.bandsintown.com/e/2",
+        "https://www.bandsintown.com/e/3",
+        "https://www.bandsintown.com/e/4",
+        "https://www.bandsintown.com/e/5",
+        "https://new.gigstix.com/event/a",
+        "https://www.songkick.com/concerts/x",
+        "https://ra.co/events/9",
+    ]
+    out = _interleave_by_host(urls)
+    # First 4 must cover all 4 distinct hosts before bandsintown takes another slot.
+    first4_hosts = {host_for(u) for u in out[:4]}
+    assert first4_hosts == {"bandsintown.com", "gigstix.com", "songkick.com", "ra.co"}
+    # The full set is preserved.
+    assert sorted(out) == sorted(urls)
+
+
+def host_for(url: str) -> str:
+    from urllib.parse import urlparse
+
+    h = urlparse(url).netloc.lower()
+    return h.removeprefix("www.").removeprefix("new.")
 
 
 @pytest.mark.asyncio
