@@ -13,6 +13,8 @@ from app.services.ai_agent import (
     _ddgs_images_sync,
     _ddgs_proxy,
     _ddgs_text_sync,
+    _discover_local_events,
+    _extract_candidate_urls,
     _fetch_url,
     _find_event_image,
     _web_search,
@@ -335,6 +337,106 @@ async def test_execute_tool_find_event_image_appends_url(fresh_agent):
         )
     assert "Image found" in out
     assert holder == ["http://img/x"]
+
+
+def test_extract_candidate_urls_keeps_whitelisted_event_sites():
+    web_search_text = (
+        "Hood Vibes Xzibit\n"
+        "https://new.gigstix.com/event/hood-vibes-special-xzibit-beograd-29-maj-2026/\n"
+        "Snippet about Xzibit show\n\n"
+        "Bandsintown Belgrade\n"
+        "https://www.bandsintown.com/c/belgrade-rs\n"
+        "Concerts in Belgrade\n\n"
+        "Random wikipedia entry\n"
+        "https://en.wikipedia.org/wiki/Xzibit\n"
+        "Biography\n"
+    )
+    urls = _extract_candidate_urls(web_search_text)
+    assert "https://new.gigstix.com/event/hood-vibes-special-xzibit-beograd-29-maj-2026/" in urls
+    assert "https://www.bandsintown.com/c/belgrade-rs" in urls
+    assert all("wikipedia" not in u for u in urls)
+
+
+def test_extract_candidate_urls_returns_empty_on_no_matches():
+    assert _extract_candidate_urls("just some text\nhttps://example.com\nfoo") == []
+
+
+@pytest.mark.asyncio
+async def test_discover_local_events_runs_pipeline_and_concatenates(fresh_agent):
+    """Pipeline runs searches in parallel, dedupes URLs, fetches matches,
+    and returns one blob with each fetched page prefixed by its URL."""
+
+    async def fake_search(query: str, max_results: int = 5) -> str:
+        if "gigstix" in query:
+            return "Xzibit Belgrade\nhttps://new.gigstix.com/event/hood-vibes-xzibit/\nMay 29\n"
+        if "bandsintown" in query and "metal" in query:
+            return "Metallica Belgrade\nhttps://www.bandsintown.com/e/12345\nSome metal show\n"
+        return "no relevant hits\nhttps://example.com\njunk"
+
+    async def fake_fetch(url: str) -> str:
+        return f"<page content for {url}>"
+
+    with (
+        patch("app.services.ai_agent._web_search", new=AsyncMock(side_effect=fake_search)),
+        patch("app.services.ai_agent._fetch_url", new=AsyncMock(side_effect=fake_fetch)),
+    ):
+        out = await _discover_local_events(
+            city="Belgrade",
+            tz_name="Europe/Belgrade",
+            date_min="2026-05-25",
+            date_max="2026-06-01",
+        )
+
+    assert "Belgrade, 2026-05-25 to 2026-06-01" in out
+    assert "https://new.gigstix.com/event/hood-vibes-xzibit/" in out
+    assert "https://www.bandsintown.com/e/12345" in out
+    assert "<page content for https://new.gigstix.com/event/hood-vibes-xzibit/>" in out
+
+
+@pytest.mark.asyncio
+async def test_discover_local_events_no_candidates_returns_honest_message():
+    async def fake_search(query: str, max_results: int = 5) -> str:
+        return "junk\nhttps://example.com\nno event sites here"
+
+    with patch("app.services.ai_agent._web_search", new=AsyncMock(side_effect=fake_search)):
+        out = await _discover_local_events(
+            city="Belgrade",
+            tz_name="Europe/Belgrade",
+            date_min="2026-05-25",
+            date_max="2026-06-01",
+        )
+    assert "No candidate event URLs" in out
+    assert "do NOT fabricate" in out
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_dispatches_discover_local_events(fresh_agent):
+    with (
+        patch("app.services.ai_agent.auth_service") as auth,
+        patch(
+            "app.services.ai_agent._discover_local_events",
+            new=AsyncMock(return_value="discovery results"),
+        ) as discover,
+    ):
+        auth.get_user_timezone = AsyncMock(return_value="Europe/Belgrade")
+        out = await fresh_agent._execute_tool(
+            user_id=1,
+            name="discover_local_events",
+            args={
+                "date_min": "2026-05-25",
+                "date_max": "2026-06-01",
+                "genres": ["rock", "metal"],
+            },
+            image_holder=[],
+            pending_holder=[],
+        )
+    assert out == "discovery results"
+    discover.assert_awaited_once()
+    assert discover.await_args is not None
+    kwargs = discover.await_args.kwargs
+    assert kwargs["city"] == "Belgrade"
+    assert kwargs["tz_name"] == "Europe/Belgrade"
+    assert kwargs["genres"] == ["rock", "metal"]
 
 
 @pytest.mark.asyncio

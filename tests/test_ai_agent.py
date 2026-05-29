@@ -174,7 +174,7 @@ class TestSystemPromptRendering:
         assert "Belgrade" in rendered
         assert "куда сходить" in rendered or "EVENT DISCOVERY" in rendered
         assert "gigstix.com" in rendered
-        assert "BANDSINTOWN FIRST" in rendered
+        assert "discover_local_events" in rendered
 
 
 class TestDetectLanguage:

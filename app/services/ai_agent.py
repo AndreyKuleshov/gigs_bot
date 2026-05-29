@@ -237,60 +237,37 @@ _SYSTEM_PROMPT = (
     "эту субботу?', 'where can I go tonight?', 'any stand-up this weekend?'):\n"
     "  1. If the dates are RELATIVE (this weekend, next week, tonight, tomorrow…) "
     "call get_date_range first; for a specific date use it directly.\n"
-    "  2. Call web_search with an ENGLISH query that includes the city, the date "
-    "range, and event-type keywords. Examples: "
-    "'concerts in {city} this weekend tickets', "
-    "'stand-up comedy {city} April 25 26 2026', "
-    "'parties events {city} {timezone} Saturday'.\n"
-    "  2a. PRIORITY SOURCES — run follow-up searches in this order, stopping "
-    "once you have enough dated options:\n"
-    "    (1) BANDSINTOWN FIRST (best coverage for rock / metal / metalcore / "
-    "hip-hop). Try multiple genre-scoped queries: "
-    "'site:bandsintown.com {city} rock', "
-    "'site:bandsintown.com {city} metal', "
-    "'site:bandsintown.com {city} metalcore', "
-    "'site:bandsintown.com {city} hip-hop'. If the user asked for a specific "
-    "genre, use only the matching query; otherwise run all four.\n"
-    "    (2) REGIONAL TICKETING for {city} — often the ONLY place local "
-    "promoters list shows that global aggregators miss: {regional_sources}. "
-    "Query as 'site:<source> {city}' or 'site:<source> <artist or date>'.\n"
-    "    (3) THEN the other global specialised sources: "
-    "'concerts {city} site:songkick.com', "
-    "'site:ticketmaster.com {city} concerts', "
-    "'site:ra.co {city}' (electronic / club nights).\n"
-    "  These specialised sources give more reliable dates and ticket links "
-    "than generic web pages.\n"
-    "  2b. CRITICAL — search snippets often DON'T contain real event dates. "
-    "When you get a URL from a listing site (bandsintown.com/c/<city>, "
-    "gigstix.com/event/..., eventim.rs/..., songkick.com/metro-areas/..., "
-    "ticketmaster.com pages, ra.co/events/..., venue homepages), call "
-    "fetch_url on it and read the actual page content for concrete event "
-    "names + dates. Don't fabricate an event from just a URL slug.\n"
-    "  2c. STRICT FILTER — every option you present MUST include a CONCRETE "
-    "DATE (day + month + year, or at least day + month). If you cannot "
-    "extract a real date, DROP that option — do NOT write 'дата не указана' "
-    "or 'TBD'. If after all searches you have fewer than 2 dated options, "
-    "say so honestly: 'Не нашёл публичных анонсов с конкретными датами для "
-    "<город> на этот период. Вот общая ссылка: <bandsintown URL>', and stop.\n"
-    "  2d. STRICT GENRE — if the user asked specifically for rock / "
-    "metal / electronic / stand-up / etc., do NOT include unrelated event "
-    "types (conferences, exhibitions, classical, choir festivals) just to "
-    "hit a 3-5 count. Filter by the requested genre.\n"
-    "  3. Present 3-5 concrete options. For EACH one include ALL of: "
+    "  2. Call discover_local_events with the resolved date_min / date_max. "
+    "If the user asked for a specific genre, pass it (e.g. genres=['hip-hop'] "
+    "for «хип-хоп концерты», genres=['metal','metalcore'] for «металкор»). "
+    "The tool runs the full search + fetch pipeline in code "
+    "(Bandsintown by genre, regional ticketing sources for {city} — "
+    "{regional_sources}, plus Songkick / Ticketmaster / RA) and returns "
+    "fetched event-page text. After it returns, DO NOT call web_search or "
+    "fetch_url again for discovery — parse the returned text.\n"
+    "  3. STRICT DATE FILTER — every option you present MUST include a "
+    "CONCRETE DATE (day + month + year) that falls inside the requested "
+    "date range. If you cannot extract a real date for a candidate, DROP "
+    "that option — do NOT write 'дата не указана' or 'TBD'. If "
+    "discover_local_events returned no usable dated events, say so "
+    "honestly: «Не нашёл публичных анонсов с конкретными датами для "
+    "{city} на этот период.», and stop.\n"
+    "  4. STRICT GENRE — if the user asked specifically for rock / metal / "
+    "electronic / stand-up / etc., do NOT include unrelated event types "
+    "(conferences, exhibitions, classical, choir festivals) just to hit a "
+    "3-5 count. Filter by the requested genre.\n"
+    "  5. Present 3-5 concrete options. For EACH include ALL of: "
     "<b>name</b>, date/time, venue, and a clickable link "
-    '(use <a href="...">text</a>). The link is MANDATORY — either a ticket '
-    "purchase URL or an info page about THAT specific event. CRITICAL: "
-    "the link must point to the INDIVIDUAL event, not to the listing/"
-    "metro-area page you got it from. fetch_url's output puts URLs in "
-    "[brackets] right after each anchor's text — use those per-event URLs, "
-    "not the listing page you originally fetched. If a per-event URL is "
-    "not available, DROP that option (do NOT substitute the listing URL). "
-    "Better fewer options each with a real link than a long list with "
-    "fake/listing links. Do not invent URLs.\n"
-    "  4. At the end, ask the user which one(s) they'd like to add to the calendar. "
-    "If they confirm, call create_event for each picked one.\n"
-    "  5. NEVER fabricate events, ticket URLs, venues, or dates. If the web search "
-    "didn't surface usable info, say so honestly instead of making things up."
+    '(<a href="...">text</a>). The link is MANDATORY and must point to '
+    "the INDIVIDUAL event, NOT a listing / metro-area / city page. The "
+    "tool output puts URLs in [brackets] right after each anchor's text — "
+    "use those per-event URLs. If a per-event URL is not available for an "
+    "option, DROP it (do NOT substitute the listing URL). Better fewer "
+    "options each with a real link than a long list with fake/listing "
+    "links. Do not invent URLs.\n"
+    "  6. At the end, ask the user which one(s) they'd like to add to the "
+    "calendar. If they confirm, call create_event for each picked one.\n"
+    "  7. NEVER fabricate events, ticket URLs, venues, or dates."
 )
 
 _TOOLS: list[dict] = [
@@ -530,6 +507,50 @@ _TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "discover_local_events",
+            "description": (
+                "Find concerts / parties / shows / stand-up happening in the "
+                "user's city for a given date range. Use this FOR ALL event-"
+                "discovery queries ('куда сходить', 'concerts this week', "
+                "'что происходит', etc.) instead of running web_search "
+                "manually. The tool queries Bandsintown by genre, regional "
+                "ticketing for the user's region (gigstix.com / eventim.rs / "
+                "tickets.rs for Belgrade), and Songkick / Ticketmaster / RA "
+                "in parallel, fetches the most relevant event pages, and "
+                "returns the raw text content for you to extract concrete "
+                "event names, dates, venues, and per-event URLs from. After "
+                "calling this tool, DO NOT call web_search again — parse the "
+                "returned text and present 3-5 verified options with dates "
+                "inside the requested range."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date_min": {
+                        "type": "string",
+                        "description": "Start of date range, YYYY-MM-DD (inclusive).",
+                    },
+                    "date_max": {
+                        "type": "string",
+                        "description": "End of date range, YYYY-MM-DD (exclusive).",
+                    },
+                    "genres": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Optional genre filter — e.g. ['rock', 'metal'] "
+                            "or ['hip-hop']. If omitted, queries a broad set: "
+                            "rock / metal / metalcore / hip-hop / electronic."
+                        ),
+                    },
+                },
+                "required": ["date_min", "date_max"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "find_event_image",
             "description": (
                 "Find a photo image for an event, artist, or venue. "
@@ -671,6 +692,144 @@ async def _fetch_url(url: str) -> str:
     return text or "(empty page)"
 
 
+_EVENT_URL_PATTERNS: list = []
+
+
+def _compile_event_url_patterns() -> list:
+    import re
+
+    return [
+        re.compile(p, re.IGNORECASE)
+        for p in (
+            r"bandsintown\.com/e/",
+            r"bandsintown\.com/c/",
+            r"gigstix\.com/event/",
+            r"new\.gigstix\.com/event/",
+            r"eventim\.rs/",
+            r"tickets\.rs/",
+            r"songkick\.com/concerts/",
+            r"songkick\.com/metro-areas/",
+            r"ra\.co/events/",
+            r"ticketmaster\.[a-z.]+/event/",
+        )
+    ]
+
+
+_EVENT_URL_PATTERNS = _compile_event_url_patterns()
+_DEFAULT_DISCOVERY_GENRES: tuple[str, ...] = (
+    "rock",
+    "metal",
+    "metalcore",
+    "hip-hop",
+    "electronic",
+)
+_DISCOVER_FETCH_CAP = 6
+
+
+def _extract_candidate_urls(search_result: str) -> list[str]:
+    """Pick URLs from _web_search output that match known event-site patterns.
+
+    _web_search returns ``<title>\\n<href>\\n<body>`` blocks separated by
+    blank lines. We pull the href lines and keep only ones matching the
+    whitelist so the discovery pipeline doesn't waste fetch_url budget on
+    unrelated pages (e.g. wikipedia entries about the artist).
+    """
+    urls: list[str] = []
+    for raw in search_result.splitlines():
+        line = raw.strip()
+        if line.startswith(("http://", "https://")) and any(
+            p.search(line) for p in _EVENT_URL_PATTERNS
+        ):
+            urls.append(line)
+    return urls
+
+
+async def _discover_local_events(
+    city: str,
+    tz_name: str,
+    date_min: str,
+    date_max: str,
+    genres: list[str] | None = None,
+) -> str:
+    """Run the full event-discovery pipeline and return a verifiable listing.
+
+    Searches Bandsintown by genre, regional ticketing for the user's tz, and
+    the global aggregators (Songkick / Ticketmaster / RA) in parallel, then
+    fetches the top candidate URLs and concatenates their text content. The
+    model receives one structured blob instead of choosing which searches to
+    run — empirically the model was lazy about following multi-step search +
+    fetch prompt instructions, so this encapsulates discovery in code.
+    """
+    genres_to_query = list(genres) if genres else list(_DEFAULT_DISCOVERY_GENRES)
+    queries: list[str] = [f"site:bandsintown.com {city} {g}" for g in genres_to_query]
+    for src in _REGIONAL_SOURCES.get(tz_name, []):
+        queries.append(f"site:{src} {city}")
+    queries.extend(
+        [
+            f"concerts {city} site:songkick.com",
+            f"site:ra.co {city}",
+            f"site:ticketmaster.com {city} concerts",
+        ]
+    )
+
+    logger.info(
+        "discover_local_events city=%s tz=%s dates=%s..%s queries=%d",
+        city,
+        tz_name,
+        date_min,
+        date_max,
+        len(queries),
+    )
+
+    search_results = await asyncio.gather(
+        *[_web_search(q, max_results=5) for q in queries],
+        return_exceptions=True,
+    )
+
+    seen: set[str] = set()
+    candidate_urls: list[str] = []
+    for result in search_results:
+        if not isinstance(result, str):
+            continue
+        for url in _extract_candidate_urls(result):
+            if url not in seen:
+                seen.add(url)
+                candidate_urls.append(url)
+
+    if not candidate_urls:
+        logger.info("discover_local_events: 0 candidate URLs")
+        return (
+            f"No candidate event URLs found for {city} between {date_min} "
+            f"and {date_max} after {len(queries)} searches. Tell the user "
+            "you couldn't find verifiable listings — do NOT fabricate events."
+        )
+
+    top_urls = candidate_urls[:_DISCOVER_FETCH_CAP]
+    logger.info(
+        "discover_local_events: %d candidates, fetching %d",
+        len(candidate_urls),
+        len(top_urls),
+    )
+    fetched = await asyncio.gather(
+        *[_fetch_url(u) for u in top_urls],
+        return_exceptions=True,
+    )
+
+    parts: list[str] = [
+        f"Event-discovery results for {city}, {date_min} to {date_max}. "
+        f"Below are {len(top_urls)} fetched event/listing pages — parse them "
+        "for CONCRETE event names + dates + venues + per-event URLs (anchors "
+        "are rendered as 'text [URL]'). Present 3-5 options whose dates fall "
+        "inside the requested range; DROP any option without a verified date."
+    ]
+    for url, text in zip(top_urls, fetched, strict=True):
+        if isinstance(text, BaseException):
+            parts.append(f"=== {url}\n[fetch failed: {type(text).__name__}]")
+            continue
+        parts.append(f"=== {url}\n{text}")
+    return "\n\n".join(parts)
+
+
 async def _find_event_image(query: str) -> str | None:
     try:
         results = await asyncio.to_thread(_ddgs_images_sync, query)
@@ -730,6 +889,18 @@ class AIAgent:
 
         if name == "fetch_url":
             return await _fetch_url(args.get("url", ""))
+
+        if name == "discover_local_events":
+            user_tz_name = await auth_service.get_user_timezone(user_id)
+            raw_genres = args.get("genres")
+            genres = [str(g) for g in raw_genres] if isinstance(raw_genres, list) else None
+            return await _discover_local_events(
+                city=_city_from_tz(user_tz_name),
+                tz_name=user_tz_name,
+                date_min=str(args.get("date_min", "")),
+                date_max=str(args.get("date_max", "")),
+                genres=genres,
+            )
 
         if name == "find_event_image":
             url = await _find_event_image(args.get("query", ""))
