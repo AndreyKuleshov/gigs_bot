@@ -345,17 +345,22 @@ def test_extract_candidate_urls_keeps_whitelisted_event_sites():
         "Hood Vibes Xzibit\n"
         "https://new.gigstix.com/event/hood-vibes-special-xzibit-beograd-29-maj-2026/\n"
         "Snippet about Xzibit show\n\n"
-        "Bandsintown Belgrade\n"
-        "https://www.bandsintown.com/c/belgrade-rs\n"
+        "AllEvents.in Belgrade\n"
+        "https://allevents.in/belgrade/concerts\n"
         "Concerts in Belgrade\n\n"
         "Random wikipedia entry\n"
         "https://en.wikipedia.org/wiki/Xzibit\n"
-        "Biography\n"
+        "Biography\n\n"
+        "Bandsintown (blocked from fetch)\n"
+        "https://www.bandsintown.com/c/belgrade-rs\n"
+        "Should not be in candidates\n"
     )
     urls = _extract_candidate_urls(web_search_text)
     assert "https://new.gigstix.com/event/hood-vibes-special-xzibit-beograd-29-maj-2026/" in urls
-    assert "https://www.bandsintown.com/c/belgrade-rs" in urls
+    assert "https://allevents.in/belgrade/concerts" in urls
     assert all("wikipedia" not in u for u in urls)
+    # Bandsintown 403s our prod IP — excluded from the whitelist on purpose.
+    assert all("bandsintown" not in u for u in urls)
 
 
 def test_extract_candidate_urls_returns_empty_on_no_matches():
@@ -398,8 +403,8 @@ async def test_discover_local_events_runs_pipeline_and_concatenates(fresh_agent)
     async def fake_search(query: str, max_results: int = 5) -> str:
         if "gigstix" in query:
             return "Xzibit Belgrade\nhttps://new.gigstix.com/event/hood-vibes-xzibit/\nMay 29\n"
-        if "bandsintown" in query and "metal" in query:
-            return "Metallica Belgrade\nhttps://www.bandsintown.com/e/12345\nSome metal show\n"
+        if "allevents.in" in query and "metal" in query:
+            return "Metal night\nhttps://allevents.in/belgrade/metal-night-123\nSome metal show\n"
         return "no relevant hits\nhttps://example.com\njunk"
 
     async def fake_fetch(url: str) -> str:
@@ -417,25 +422,39 @@ async def test_discover_local_events_runs_pipeline_and_concatenates(fresh_agent)
         )
 
     assert "Belgrade, 2026-05-25 to 2026-06-01" in out
+    # Search-discovered URLs from whitelisted hosts are fetched.
     assert "https://new.gigstix.com/event/hood-vibes-xzibit/" in out
-    assert "https://www.bandsintown.com/e/12345" in out
+    assert "https://allevents.in/belgrade/metal-night-123" in out
     assert "<page content for https://new.gigstix.com/event/hood-vibes-xzibit/>" in out
+    # Direct-fetch listing URLs for Belgrade are always probed.
+    assert "https://allevents.in/belgrade/all" in out
+    assert "https://www.last.fm/events?location=Belgrade" in out
 
 
 @pytest.mark.asyncio
-async def test_discover_local_events_no_candidates_returns_honest_message():
+async def test_discover_local_events_still_probes_direct_urls_when_search_empty():
+    """When search yields no whitelisted URLs, the city-specific direct
+    listing URLs (AllEvents.in, Last.fm) are still fetched so the model
+    never gets back a literal 'nothing found' for known cities."""
+
     async def fake_search(query: str, max_results: int = 5) -> str:
         return "junk\nhttps://example.com\nno event sites here"
 
-    with patch("app.services.ai_agent._web_search", new=AsyncMock(side_effect=fake_search)):
+    async def fake_fetch(url: str) -> str:
+        return f"<fetched {url}>"
+
+    with (
+        patch("app.services.ai_agent._web_search", new=AsyncMock(side_effect=fake_search)),
+        patch("app.services.ai_agent._fetch_url", new=AsyncMock(side_effect=fake_fetch)),
+    ):
         out = await _discover_local_events(
             city="Belgrade",
             tz_name="Europe/Belgrade",
             date_min="2026-05-25",
             date_max="2026-06-01",
         )
-    assert "No candidate event URLs" in out
-    assert "do NOT fabricate" in out
+    assert "https://allevents.in/belgrade/all" in out
+    assert "https://www.last.fm/events?location=Belgrade" in out
 
 
 @pytest.mark.asyncio

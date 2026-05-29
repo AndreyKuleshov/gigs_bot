@@ -241,8 +241,8 @@ _SYSTEM_PROMPT = (
     "If the user asked for a specific genre, pass it (e.g. genres=['hip-hop'] "
     "for «хип-хоп концерты», genres=['metal','metalcore'] for «металкор»). "
     "The tool runs the full search + fetch pipeline in code "
-    "(Bandsintown by genre, regional ticketing sources for {city} — "
-    "{regional_sources}, plus Songkick / Ticketmaster / RA) and returns "
+    "(AllEvents.in / Eventbrite / Last.fm / Songkick / Ticketmaster, plus "
+    "regional ticketing for {city} — {regional_sources}) and returns "
     "fetched event-page text. After it returns, DO NOT call web_search or "
     "fetch_url again for discovery — parse the returned text.\n"
     "  3. STRICT DATE FILTER — every option you present MUST include a "
@@ -513,15 +513,17 @@ _TOOLS: list[dict] = [
                 "user's city for a given date range. Use this FOR ALL event-"
                 "discovery queries ('куда сходить', 'concerts this week', "
                 "'что происходит', etc.) instead of running web_search "
-                "manually. The tool queries Bandsintown by genre, regional "
+                "manually. The tool queries AllEvents.in, Eventbrite, "
+                "Last.fm, Songkick, Ticketmaster, and the regional "
                 "ticketing for the user's region (gigstix.com / eventim.rs / "
-                "tickets.rs for Belgrade), and Songkick / Ticketmaster / RA "
-                "in parallel, fetches the most relevant event pages, and "
-                "returns the raw text content for you to extract concrete "
-                "event names, dates, venues, and per-event URLs from. After "
-                "calling this tool, DO NOT call web_search again — parse the "
-                "returned text and present 3-5 verified options with dates "
-                "inside the requested range."
+                "tickets.rs for Belgrade) in parallel, plus always-fetches "
+                "the city listing pages for AllEvents.in / Last.fm / "
+                "Eventbrite. It returns the raw text content of fetched "
+                "event pages for you to extract concrete event names, dates, "
+                "venues, and per-event URLs from. After calling this tool, "
+                "DO NOT call web_search again — parse the returned text and "
+                "present 3-5 verified options with dates inside the "
+                "requested range."
             ),
             "parameters": {
                 "type": "object",
@@ -706,16 +708,21 @@ def _compile_event_url_patterns() -> list:
     return [
         re.compile(p, re.IGNORECASE)
         for p in (
-            r"bandsintown\.com/e/",
-            r"bandsintown\.com/c/",
+            # Regional ticketing (Serbia)
             r"gigstix\.com/event/",
             r"new\.gigstix\.com/event/",
             r"eventim\.rs/",
             r"tickets\.rs/",
+            # Global aggregators (verified accessible from data-center IPs)
+            r"allevents\.in/",
+            r"eventbrite\.[a-z.]+/(e|d|b)/",
+            r"last\.fm/(event|events|venue)",
             r"songkick\.com/concerts/",
             r"songkick\.com/metro-areas/",
-            r"ra\.co/events/",
             r"ticketmaster\.[a-z.]+/event/",
+            # NOTE: bandsintown.com and ra.co are intentionally excluded —
+            # they 403 from our prod data-center IP regardless of UA/TLS
+            # fingerprint, so fetching them wastes the fetch budget.
         )
     ]
 
@@ -728,7 +735,32 @@ _DEFAULT_DISCOVERY_GENRES: tuple[str, ...] = (
     "hip-hop",
     "electronic",
 )
-_DISCOVER_FETCH_CAP = 6
+_DISCOVER_FETCH_CAP = 8
+
+
+_EVENTBRITE_CITY_URLS: dict[str, str] = {
+    "belgrade": "https://www.eventbrite.com/b/serbia--belgrade/music/",
+}
+
+
+def _direct_fetch_urls_for_city(city: str) -> list[str]:
+    """Stable listing URLs we always fetch for a given city.
+
+    These global aggregators don't 403 data-center IPs and contain plenty
+    of dated event entries rendered as plain server-side HTML. Probing them
+    directly (instead of relying on a search engine to surface their pages)
+    removes one layer of luck from the discovery pipeline.
+    """
+    slug = city.lower().replace(" ", "-")
+    urls = [
+        f"https://allevents.in/{slug}/all",
+        f"https://allevents.in/{slug}/concerts",
+        f"https://www.last.fm/events?location={city}",
+    ]
+    eventbrite = _EVENTBRITE_CITY_URLS.get(slug)
+    if eventbrite is not None:
+        urls.append(eventbrite)
+    return urls
 
 
 def _extract_candidate_urls(search_result: str) -> list[str]:
@@ -797,16 +829,26 @@ async def _discover_local_events(
     fetch prompt instructions, so this encapsulates discovery in code.
     """
     genres_to_query = list(genres) if genres else list(_DEFAULT_DISCOVERY_GENRES)
-    queries: list[str] = [f"site:bandsintown.com {city} {g}" for g in genres_to_query]
+    queries: list[str] = []
+    # Regional ticketing (often the only place local promoters list shows)
     for src in _REGIONAL_SOURCES.get(tz_name, []):
         queries.append(f"site:{src} {city}")
+    # Global aggregators that are reachable from data-center IPs.
+    # AllEvents.in / Eventbrite / Last.fm replace bandsintown + ra.co
+    # (which 403 our prod IP) — and they have a wider event coverage anyway.
     queries.extend(
         [
+            f"site:allevents.in {city}",
+            f"site:eventbrite.com {city} music",
+            f"site:last.fm events {city}",
             f"concerts {city} site:songkick.com",
-            f"site:ra.co {city}",
             f"site:ticketmaster.com {city} concerts",
         ]
     )
+    # Genre-scoped queries against allevents (which respects keywords better
+    # than the more general crawlers) — gives us a metal/hip-hop slice
+    # without paying the bandsintown fetch tax.
+    queries.extend(f"site:allevents.in {city} {g}" for g in genres_to_query)
 
     logger.info(
         "discover_local_events city=%s tz=%s dates=%s..%s queries=%d",
@@ -824,6 +866,12 @@ async def _discover_local_events(
 
     seen: set[str] = set()
     candidate_urls: list[str] = []
+    # Always-fetch listing pages for this city — these aggregators are stable
+    # and reachable, so we don't depend on the search engine surfacing them.
+    for url in _direct_fetch_urls_for_city(city):
+        if url not in seen:
+            seen.add(url)
+            candidate_urls.append(url)
     for result in search_results:
         if not isinstance(result, str):
             continue
