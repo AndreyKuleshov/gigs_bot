@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 _MAX_TOOL_ROUNDS = 8
 _HISTORY_TURNS = 10  # pairs of (user, assistant) messages retained per user
+_MAX_VALIDATION_RETRIES = 2  # how many times we ask the model to rewrite if it fabricated URLs
 
 
 @dataclass
@@ -264,10 +265,21 @@ _SYSTEM_PROMPT = (
     "use those per-event URLs. If a per-event URL is not available for an "
     "option, DROP it (do NOT substitute the listing URL). Better fewer "
     "options each with a real link than a long list with fake/listing "
-    "links. Do not invent URLs.\n"
-    "  6. At the end, ask the user which one(s) they'd like to add to the "
+    "links.\n"
+    "  6. CRITICAL — URL ANTI-FABRICATION: every event URL you include "
+    "MUST appear verbatim somewhere in the discover_local_events output "
+    "you received this turn. Do NOT construct URLs from training memory "
+    "(e.g. you remember an artist and guess "
+    "'last.fm/event/<random-id>-<artist>'). Such URLs often resolve to "
+    "real events but in OTHER cities, which is worse than no URL. If you "
+    "do not see a per-event URL for an artist in the fetched text, that "
+    "event does NOT count as a verified Belgrade option — DROP IT.\n"
+    "  7. At the end, ask the user which one(s) they'd like to add to the "
     "calendar. If they confirm, call create_event for each picked one.\n"
-    "  7. NEVER fabricate events, ticket URLs, venues, or dates."
+    "  8. NEVER fabricate events, ticket URLs, venues, or dates. The "
+    "venue and date for every option must also be present verbatim in the "
+    "discover_local_events output (you can paraphrase, but the city, "
+    "year, month, day, and venue name must come from the fetched text)."
 )
 
 _TOOLS: list[dict] = [
@@ -917,6 +929,65 @@ async def _discover_local_events(
     return "\n\n".join(parts)
 
 
+_VALIDATED_EVENT_HOSTS: tuple[str, ...] = (
+    "songkick.com",
+    "bandsintown.com",
+    "last.fm",
+    "allevents.in",
+    "eventbrite.com",
+    "eventbrite.co",
+    "ra.co",
+    "ticketmaster.com",
+    "ticketmaster.co",
+    "gigstix.com",
+    "eventim.rs",
+    "tickets.rs",
+)
+
+
+def _extract_response_urls(text: str) -> list[str]:
+    """Pick every http(s) URL out of the model's reply, stripping trailing
+    punctuation that often accompanies inline links."""
+    import re
+
+    return [u.rstrip(".,;:!?)\"'>") for u in re.findall(r"https?://[^\s<>\"'\)\]]+", text)]
+
+
+def _is_event_url(url: str) -> bool:
+    return any(h in url for h in _VALIDATED_EVENT_HOSTS)
+
+
+def _gather_tool_outputs(messages: list) -> str:
+    """Concatenate the content of every tool-role message in the current
+    conversation. Used as the source-of-truth corpus when checking whether
+    an event URL the model put in its reply was actually returned by a
+    tool (vs. fabricated from training memory)."""
+    parts: list[str] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") != "tool":
+            continue
+        content = m.get("content", "")
+        if isinstance(content, str):
+            parts.append(content)
+    return "\n".join(parts)
+
+
+def _find_fabricated_event_urls(response_text: str, tool_output: str) -> list[str]:
+    """Return event-site URLs in the model's reply that are NOT present in
+    any tool result we returned. Non-event URLs (e.g. wikipedia, the bot's
+    own t.me page) are ignored — we only police URLs the model would only
+    legitimately have via discover_local_events / fetch_url."""
+    fabricated: list[str] = []
+    for url in _extract_response_urls(response_text):
+        if not _is_event_url(url):
+            continue
+        if url not in tool_output:
+            fabricated.append(url)
+    return fabricated
+
+
 async def _find_event_image(query: str) -> str | None:
     try:
         results = await asyncio.to_thread(_ddgs_images_sync, query)
@@ -1167,41 +1238,81 @@ class AIAgent:
             {"role": "user", "content": message},
         ]
 
-        for _ in range(_MAX_TOOL_ROUNDS):
-            try:
-                response = await client.chat.completions.create(
-                    model=settings.openai_model,
-                    messages=messages,
-                    tools=_TOOLS,  # type: ignore[arg-type]
-                    tool_choice="auto",
-                )
-            except Exception as exc:
-                logger.error("OpenAI chat.completions error: %s", exc)
-                return AgentResponse(text="Sorry, I couldn't reach the AI service right now.")
+        for validation_round in range(_MAX_VALIDATION_RETRIES + 1):
+            for _ in range(_MAX_TOOL_ROUNDS):
+                try:
+                    response = await client.chat.completions.create(
+                        model=settings.openai_model,
+                        messages=messages,
+                        tools=_TOOLS,  # type: ignore[arg-type]
+                        tool_choice="auto",
+                    )
+                except Exception as exc:
+                    logger.error("OpenAI chat.completions error: %s", exc)
+                    return AgentResponse(text="Sorry, I couldn't reach the AI service right now.")
 
-            choice = response.choices[0]
-            messages.append(choice.message.model_dump(exclude_unset=True))  # type: ignore[arg-type]
+                choice = response.choices[0]
+                messages.append(choice.message.model_dump(exclude_unset=True))  # type: ignore[arg-type]
 
-            if choice.finish_reason != "tool_calls" or not choice.message.tool_calls:
+                if choice.finish_reason != "tool_calls" or not choice.message.tool_calls:
+                    break
+
+                for tc in choice.message.tool_calls:
+                    if not isinstance(tc, ChatCompletionMessageToolCall):
+                        continue
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        args = {}
+                    tool_result = await self._execute_tool(
+                        user_id, tc.function.name, args, image_holder, pending_holder
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": tool_result,
+                        }
+                    )
+
+            last_candidate = response.choices[0].message.content  # type: ignore[possibly-undefined]
+            if not last_candidate:
                 break
 
-            for tc in choice.message.tool_calls:
-                if not isinstance(tc, ChatCompletionMessageToolCall):
-                    continue
-                try:
-                    args = json.loads(tc.function.arguments)
-                except json.JSONDecodeError:
-                    args = {}
-                tool_result = await self._execute_tool(
-                    user_id, tc.function.name, args, image_holder, pending_holder
+            fabricated = _find_fabricated_event_urls(last_candidate, _gather_tool_outputs(messages))
+            if not fabricated:
+                break
+
+            if validation_round >= _MAX_VALIDATION_RETRIES:
+                logger.warning(
+                    "Fabricated URLs still present after %d retries: %s",
+                    _MAX_VALIDATION_RETRIES,
+                    fabricated,
                 )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": tool_result,
-                    }
-                )
+                break
+
+            logger.warning(
+                "Fabricated event URLs detected (round %d), asking model to rewrite: %s",
+                validation_round,
+                fabricated,
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "These URLs in your previous answer were NOT present in any "
+                        "tool result you received this turn: "
+                        + ", ".join(fabricated)
+                        + ". You fabricated them — they likely resolve to real "
+                        "events in OTHER cities, not the user's city. Rewrite "
+                        "your answer using ONLY events whose per-event URL appears "
+                        "verbatim in the discover_local_events output. Aim for 3-5 "
+                        "verified options; if fewer real events exist for the "
+                        "requested period, return only those — do NOT invent "
+                        "events to hit a count."
+                    ),
+                }
+            )
 
         last = response.choices[0].message.content  # type: ignore[possibly-undefined]
         if last:

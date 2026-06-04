@@ -17,6 +17,7 @@ from app.services.ai_agent import (
     _extract_candidate_urls,
     _fetch_url,
     _find_event_image,
+    _find_fabricated_event_urls,
     _interleave_by_host,
     _web_search,
     ai_agent,
@@ -393,6 +394,40 @@ def host_for(url: str) -> str:
 
     h = urlparse(url).netloc.lower()
     return h.removeprefix("www.").removeprefix("new.")
+
+
+def test_find_fabricated_event_urls_flags_unseen_event_urls():
+    """URLs to known event hosts that weren't in any tool output are
+    flagged. This is the exact failure mode we observed in prod: the
+    model invented last.fm event URLs for artists it remembered from
+    training, and those URLs resolved to events in other cities."""
+    response = (
+        "Here are concerts:\n"
+        "• Blitzkid <a href='https://www.last.fm/event/5032702-blitzkid'>tickets</a>\n"
+        "• Real Show <a href='https://allevents.in/belgrade/real-show'>tickets</a>\n"
+    )
+    tool_output = (
+        "...Real Show on June 5...\n[https://allevents.in/belgrade/real-show]\n...other events...\n"
+    )
+    fabricated = _find_fabricated_event_urls(response, tool_output)
+    assert fabricated == ["https://www.last.fm/event/5032702-blitzkid"]
+
+
+def test_find_fabricated_event_urls_ignores_non_event_urls():
+    """Non-event URLs (wikipedia, t.me, etc.) shouldn't be policed —
+    they may legitimately appear in the model's reply without being in
+    a tool output."""
+    response = "See <a href='https://en.wikipedia.org/wiki/Xzibit'>wiki</a>."
+    tool_output = "no urls here"
+    assert _find_fabricated_event_urls(response, tool_output) == []
+
+
+def test_find_fabricated_event_urls_strips_trailing_punctuation():
+    """Inline links often end with sentence punctuation; we must match
+    against the bare URL, not the URL+'.'."""
+    response = "More info at https://allevents.in/belgrade/show-123."
+    tool_output = "...event link [https://allevents.in/belgrade/show-123]..."
+    assert _find_fabricated_event_urls(response, tool_output) == []
 
 
 @pytest.mark.asyncio
